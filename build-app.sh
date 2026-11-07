@@ -24,22 +24,31 @@ swift build -c release $ARCH_FLAGS
 BIN="$(swift build -c release $ARCH_FLAGS --show-bin-path)/SecureClone"
 APP="build/SecureClone.app"
 
+# Version: marketing version from the VERSION file; build number from the
+# CI run number (auto-increments on GitHub) or 0 for a local build.
+VERSION="$(tr -d '[:space:]' < VERSION)"
+BUILD="${GITHUB_RUN_NUMBER:-0}"
+echo "▶ Version $VERSION (build $BUILD)"
+
 echo "▶ Assembling app bundle…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/SecureClone"
 cp Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
 echo -n "APPL????" > "$APP/Contents/PkgInfo"
 
 echo "▶ Ad-hoc signing…"
 codesign --force --deep --sign - "$APP"
 
 echo "▶ Zipping…"
-rm -f build/SecureClone.zip
-ditto -c -k --keepParent "$APP" build/SecureClone.zip
+ZIP="build/SecureClone-$VERSION-build$BUILD.zip"
+rm -f build/SecureClone*.zip
+ditto -c -k --keepParent "$APP" "$ZIP"
 
 echo
 echo "✅ Done:  $APP"
-echo "         build/SecureClone.zip"
+echo "         $ZIP"
 echo
 echo "First launch: right-click SecureClone.app → Open (ad-hoc signed, not notarized)."

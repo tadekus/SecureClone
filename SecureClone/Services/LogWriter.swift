@@ -26,7 +26,7 @@ enum LogWriter {
         finishDate: Date
     ) -> String {
         var lines: [String] = []
-        lines.append("SecureClone Job Report")
+        lines.append("\(AppInfo.fullName) — Job Report")
         lines.append("======================")
         lines.append("Job:        \(jobName)")
         lines.append("Started:    \(stamp.string(from: startDate))")

@@ -65,20 +65,54 @@ struct JobProgressView: View {
 struct JobHeader: View {
     @ObservedObject var job: CloneJob
 
+    private var showStats: Bool {
+        job.state == .copying || job.state == .verifying || job.state == .completed
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(job.state.label).font(.headline)
                 Spacer()
+                if showStats {
+                    Text(job.percentText)
+                        .font(.system(.title3, design: .rounded).monospacedDigit())
+                        .bold()
+                }
                 statusBadge
             }
+
             ProgressView(value: job.overallProgress)
+
+            if showStats {
+                HStack(spacing: 18) {
+                    stat("Speed",   job.speedText,  icon: "speedometer")
+                    stat("ETA",     job.state == .completed ? "done" : job.etaText,
+                         icon: "clock")
+                    stat("Elapsed", job.elapsedText, icon: "stopwatch")
+                    stat("Copied",
+                         "\(VolumeInfo.format(job.bytesProcessed)) / \(VolumeInfo.format(job.totalBytes))",
+                         icon: "doc.on.doc")
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             if !job.currentFile.isEmpty && job.state == .copying {
                 Text(job.currentFile)
                     .font(.system(.caption, design: .monospaced))
                     .lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func stat(_ label: String, _ value: String, icon: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+            Text(label + ":")
+            Text(value).monospacedDigit().foregroundStyle(.primary)
         }
     }
 

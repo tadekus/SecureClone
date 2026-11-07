@@ -46,7 +46,12 @@ struct ContentView: View {
                 .font(.title)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading) {
-                Text("SecureClone").font(.title2).bold()
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("SecureClone").font(.title2).bold()
+                    Text("v\(AppInfo.versionString)")
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                }
                 Text("Verified media offload").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()

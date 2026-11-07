@@ -70,15 +70,12 @@ final class CloneViewModel: ObservableObject {
             // publish at most ~10×/sec instead of once per 8 MB chunk. A poller
             // keeps the bar moving smoothly even within a single huge file.
             let progress = ProgressThrottle()
+            job.copyStartedAt = Date()
             let poller = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
                     guard let self, let j = self.job else { break }
-                    let processed = progress.snapshot()
-                    j.bytesProcessed = processed
-                    if j.totalBytes > 0 {
-                        j.overallProgress = min(1.0, Double(processed) / Double(j.totalBytes))
-                    }
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms
+                    j.recordProgress(bytes: progress.snapshot())
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250 ms
                 }
             }
             defer { poller.cancel() }
@@ -121,6 +118,10 @@ final class CloneViewModel: ObservableObject {
             poller.cancel()
             job.bytesProcessed = job.totalBytes
             job.overallProgress = 1.0
+            job.etaSeconds = 0
+            if let start = job.copyStartedAt {
+                job.elapsedSeconds = Date().timeIntervalSince(start)
+            }
 
             // 3. Verify summary + write reports
             job.state = .verifying

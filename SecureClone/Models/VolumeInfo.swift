@@ -22,7 +22,7 @@ struct VolumeInfo: Identifiable, Hashable {
 
     static func format(_ bytes: Int64) -> String {
         let f = ByteCountFormatter()
-        f.allowedUnits = [.useGB, .useTB]
+        f.allowedUnits = [.useMB, .useGB, .useTB]
         f.countStyle = .file
         return f.string(fromByteCount: bytes)
     }

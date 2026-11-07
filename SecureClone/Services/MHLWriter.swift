@@ -29,8 +29,8 @@ enum MHLWriter {
         algorithm: HashAlgorithm,
         startDate: Date,
         finishDate: Date,
-        toolName: String = "SecureClone",
-        toolVersion: String = "1.0"
+        toolName: String = AppInfo.name,
+        toolVersion: String = AppInfo.versionString
     ) -> String {
         let host = Host.current().localizedName ?? "unknown"
         let user = NSUserName()
