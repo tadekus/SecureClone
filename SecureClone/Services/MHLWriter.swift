@@ -84,10 +84,8 @@ enum MHLWriter {
                           startDate: startDate,
                           finishDate: finishDate)
 
-        let stamp = filenameTimestamp(finishDate)
-        let safeName = jobName.replacingOccurrences(of: "/", with: "-")
-        let fileName = "\(safeName)_\(stamp).mhl"
-        let dir = destinationRoot.appendingPathComponent("SecureClone_Logs", isDirectory: true)
+        let fileName = "\(ReportNaming.base(jobName: jobName, date: finishDate)).mhl"
+        let dir = destinationRoot.appendingPathComponent(SessionStore.folderName, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fileURL = dir.appendingPathComponent(fileName)
         try xml.data(using: .utf8)!.write(to: fileURL)
@@ -103,9 +101,4 @@ enum MHLWriter {
          .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    private static func filenameTimestamp(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd_HHmmss"
-        return f.string(from: date)
-    }
 }

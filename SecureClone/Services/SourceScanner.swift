@@ -20,7 +20,8 @@ enum SourceScanner {
     /// File / directory names to skip entirely.
     private static let skipNames: Set<String> = [
         ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems",
-        ".DocumentRevisions-V100", ".DS_Store", ".apdisk"
+        ".DocumentRevisions-V100", ".DS_Store", ".apdisk",
+        SessionStore.folderName          // our own reports, if saved to the source
     ]
 
     /// Returns all copyable files under `root`, with paths relative to it.

@@ -12,8 +12,10 @@ enum JobState: Equatable {
     case idle
     case scanning
     case copying
+    case paused
     case verifying
     case completed
+    case stopped
     case failed(String)
 
     var label: String {
@@ -21,9 +23,18 @@ enum JobState: Equatable {
         case .idle:       return "Ready"
         case .scanning:   return "Scanning source…"
         case .copying:    return "Copying…"
+        case .paused:     return "Paused"
         case .verifying:  return "Verifying…"
         case .completed:  return "Completed"
+        case .stopped:    return "Stopped — can be resumed"
         case .failed(let m): return "Failed: \(m)"
+        }
+    }
+
+    var isActive: Bool {
+        switch self {
+        case .scanning, .copying, .paused, .verifying: return true
+        default: return false
         }
     }
 }
@@ -68,6 +79,13 @@ final class CloneJob: ObservableObject, Identifiable {
     @Published var currentFile: String = ""
     @Published var fileResults: [FileResult] = []
     @Published var destinationProgress: [DestinationProgress]
+
+    /// Final human-readable report (shown in the summary sheet on completion).
+    @Published var finalReport: String? = nil
+    /// Where reports were written, for "Reveal in Finder".
+    @Published var reportLocations: [URL] = []
+    /// Files skipped because a previous session had already copied them.
+    var resumedFileCount: Int = 0
 
     // Live throughput stats (updated by the progress poller).
     @Published var bytesPerSecond: Double = 0       // smoothed source-read speed

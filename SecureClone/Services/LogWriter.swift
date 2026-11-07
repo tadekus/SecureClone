@@ -83,11 +83,9 @@ enum LogWriter {
                       to destinationRoot: URL,
                       jobName: String,
                       finishDate: Date) throws -> URL {
-        let dir = destinationRoot.appendingPathComponent("SecureClone_Logs", isDirectory: true)
+        let dir = destinationRoot.appendingPathComponent(SessionStore.folderName, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HHmmss"
-        let safeName = jobName.replacingOccurrences(of: "/", with: "-")
-        let url = dir.appendingPathComponent("\(safeName)_\(f.string(from: finishDate)).txt")
+        let url = dir.appendingPathComponent("\(ReportNaming.base(jobName: jobName, date: finishDate)).txt")
         try report.data(using: .utf8)!.write(to: url)
         return url
     }

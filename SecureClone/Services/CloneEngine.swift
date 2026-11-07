@@ -35,12 +35,14 @@ enum CloneEngineError: LocalizedError {
     case cannotCreateDestination(URL)
     case writeFailed(URL, Error)
     case readFailed(URL, Error)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
         case .cannotCreateDestination(let u): return "Cannot create \(u.path)"
         case .writeFailed(let u, let e):      return "Write failed on \(u.lastPathComponent): \(e.localizedDescription)"
         case .readFailed(let u, let e):       return "Read failed on \(u.lastPathComponent): \(e.localizedDescription)"
+        case .cancelled:                      return "Stopped by user"
         }
     }
 }
@@ -73,6 +75,7 @@ final class CloneEngine: @unchecked Sendable {
         source: ScannedFile,
         destinationRoots: [URL],
         algorithm: HashAlgorithm,
+        control: CloneControl? = nil,
         onChunk: (@Sendable (Int) -> Void)? = nil
     ) throws -> CopiedFile {
 
@@ -117,10 +120,14 @@ final class CloneEngine: @unchecked Sendable {
         // Reader: this thread. Read once, hash, fan out.
         let hasher = StreamingHasher(algorithm: algorithm)
         var readError: Error? = nil
+        var wasCancelled = false
         do {
             let reader = try FileHandle(forReadingFrom: source.url)
             defer { try? reader.close() }
             while true {
+                // Pause blocks here; cancel breaks out.
+                if let c = control, !c.checkpoint() { wasCancelled = true; break }
+
                 let chunk = try autoreleasepool { try reader.read(upToCount: bufferSize) ?? Data() }
                 if chunk.isEmpty { break }
                 hasher.update(chunk)
@@ -137,6 +144,14 @@ final class CloneEngine: @unchecked Sendable {
         queues.values.forEach { $0.close() }
         group.wait()
 
+        // A cancelled or failed file must never be left half-written: a later
+        // resume could mistake it for a finished copy.
+        if wasCancelled || readError != nil || writerErrors.get() != nil {
+            for destURL in destFiles.values {
+                try? FileManager.default.removeItem(at: destURL)
+            }
+        }
+        if wasCancelled { throw CloneEngineError.cancelled }
         if let e = readError { throw e }
         if let e = writerErrors.get() { throw e }
 
@@ -162,6 +177,7 @@ final class CloneEngine: @unchecked Sendable {
         copied: [CopiedFile],
         destinationRoots: [URL],
         algorithm: HashAlgorithm,
+        control: CloneControl? = nil,
         onFileVerified: (@Sendable (URL, String, Bool) -> Void)? = nil,  // (root, relPath, ok)
         onBytes: (@Sendable (Int64) -> Void)? = nil
     ) -> [FileCloneOutcome] {
@@ -175,6 +191,7 @@ final class CloneEngine: @unchecked Sendable {
             Thread.detachNewThread {
                 defer { group.leave() }
                 for c in copied {
+                    if let ctl = control, !ctl.checkpoint() { break }   // pause / stop
                     guard let destURL = c.destinationFiles[root] else { continue }
                     let hash = (try? ChecksumService.hash(fileAt: destURL, algorithm: algorithm)) ?? "READ-ERROR"
                     let ok = (hash == c.sourceHash)

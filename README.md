@@ -59,10 +59,24 @@ Source card ──(single read, hashed inline)──┐
 
 ## Outputs
 
-Each destination drive gets a `SecureClone_Logs/` folder containing:
-- `<job>_<timestamp>.mhl` — ASC MHL v1.1 manifest (xxHash64 by default)
-- `<job>_<timestamp>.txt` — human-readable report ending in either
-  `SAFE TO WIPE SOURCE` or `DO NOT WIPE SOURCE`.
+Each destination drive (and optionally the source card) gets a
+`SecureClone_Logs/` folder containing, named `<Job>_<yyyyMMdd>_<DOW>_<HHmm>`:
+- `.mhl` — ASC MHL v1.1 manifest (xxHash64 by default)
+- `.txt` — human-readable report ending in either
+  `SAFE TO WIPE SOURCE` or `DO NOT WIPE SOURCE`
+- `.csv` — Silverstack-style clip list (semicolon-separated, `XXH64BE:` hashes)
+  that matches the other DIT tools' exports. Camera-metadata columns are empty
+  until per-format header parsing (ARRI MXF, RED R3D…) is added.
+
+## Pause / Stop / Resume
+
+- **Pause** holds the reader between chunks; **Resume** continues.
+- **Stop** ends the job cleanly. Progress is checkpointed after every file into
+  a hidden `.session_<job>.json` inside `SecureClone_Logs/` on every destination.
+- Pressing **Start Clone** again with the same card, drives and job name offers
+  to resume. Resumed files are skipped in the copy phase but are **always
+  re-verified from disk**. A half-written file is deleted on stop so it can
+  never be mistaken for a finished copy.
 
 ## Safety principles baked in
 

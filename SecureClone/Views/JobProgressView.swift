@@ -66,7 +66,10 @@ struct JobHeader: View {
     @ObservedObject var job: CloneJob
 
     private var showStats: Bool {
-        job.state == .copying || job.state == .verifying || job.state == .completed
+        switch job.state {
+        case .copying, .paused, .verifying, .completed, .stopped: return true
+        default: return false
+        }
     }
 
     var body: some View {
@@ -97,7 +100,9 @@ struct JobHeader: View {
             if showStats {
                 HStack(spacing: 18) {
                     stat("Speed",   job.speedText,  icon: "speedometer")
-                    stat("ETA",     job.state == .completed ? "done" : job.etaText,
+                    stat("ETA",     job.state == .completed ? "done"
+                                  : job.state == .paused ? "paused"
+                                  : job.state == .stopped ? "—" : job.etaText,
                          icon: "clock")
                     stat("Elapsed", job.elapsedText, icon: "stopwatch")
                     stat("Copied",
@@ -109,7 +114,13 @@ struct JobHeader: View {
                 .foregroundStyle(.secondary)
             }
 
-            if !job.currentFile.isEmpty && job.state == .copying {
+            if job.resumedFileCount > 0 {
+                Label("\(job.resumedFileCount) files restored from the previous session (re-verified)",
+                      systemImage: "arrow.counterclockwise")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if !job.currentFile.isEmpty && (job.state == .copying || job.state == .paused) {
                 Text(job.currentFile)
                     .font(.system(.caption, design: .monospaced))
                     .lineLimit(1).truncationMode(.middle)
@@ -132,6 +143,10 @@ struct JobHeader: View {
             Label("Verified", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
         case .failed:
             Label("Failed", systemImage: "xmark.seal.fill").foregroundStyle(.red)
+        case .paused:
+            Label("Paused", systemImage: "pause.circle.fill").foregroundStyle(.orange)
+        case .stopped:
+            Label("Stopped", systemImage: "stop.circle.fill").foregroundStyle(.orange)
         default:
             EmptyView()
         }
