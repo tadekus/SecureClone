@@ -104,9 +104,11 @@ enum AVExtractor {
         } else { return nil }
 
         let quanta = Int(CMTimeCodeFormatDescriptionGetFrameQuanta(fd))
-        let flags = CMTimeCodeFormatDescriptionGetTimeCodeFlags(fd)
+        // Flags are a raw UInt32 in this SDK; kCMTimeCodeFlag_DropFrame == 1 << 0.
+        let flags: UInt32 = CMTimeCodeFormatDescriptionGetTimeCodeFlags(fd)
+        let dropFrame = (flags & 1) != 0
         guard quanta > 0 else { return nil }
-        return (frames, quanta, flags.contains(.dropFrame))
+        return (frames, quanta, dropFrame)
     }
 
     // MARK: - Codec names

@@ -76,8 +76,11 @@ struct ClipCell: View {
     }
 
     private var line1: String {
-        [clip.resolution, clip.fps.map { "\($0) fps" }, clip.codec]
-            .compactMap { $0 }.joined(separator: " · ")
+        var parts: [String] = []
+        if let r = clip.resolution { parts.append(r) }
+        if let f = clip.fps { parts.append("\(f) fps") }
+        if let k = clip.codec { parts.append(k) }
+        return parts.joined(separator: " · ")
     }
     private var line2: String {
         var parts: [String] = []

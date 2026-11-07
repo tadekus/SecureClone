@@ -30,21 +30,24 @@ enum CSVReportWriter {
 
         for o in outcomes.sorted(by: { $0.relativePath < $1.relativePath }) {
             let m = byPath[o.relativePath]
-            let name = m?.name ?? (o.relativePath as NSString).lastPathComponent
-            let row = [
-                name,
-                m?.durationDisplay ?? "",
-                m?.fps ?? "",
-                m?.exposureIndex ?? "",
-                m?.ndFilter ?? "",
-                m?.shutterDisplay ?? "",
-                m?.tcStart ?? "",
-                m?.tcEnd ?? "",
-                m?.lutNodes ?? "",
-                m?.codec ?? "",
-                m?.resolution ?? "",
-                hashField(o.sourceHash, algorithm: algorithm)
-            ]
+            let name: String = m?.name ?? (o.relativePath as NSString).lastPathComponent
+
+            // Built step by step: a single 12-element literal of `??` chains
+            // makes the Swift type-checker time out.
+            var row: [String] = []
+            row.append(name)
+            row.append(m?.durationDisplay ?? "")
+            row.append(m?.fps ?? "")
+            row.append(m?.exposureIndex ?? "")
+            row.append(m?.ndFilter ?? "")
+            row.append(m?.shutterDisplay ?? "")
+            row.append(m?.tcStart ?? "")
+            row.append(m?.tcEnd ?? "")
+            row.append(m?.lutNodes ?? "")
+            row.append(m?.codec ?? "")
+            row.append(m?.resolution ?? "")
+            row.append(hashField(o.sourceHash, algorithm: algorithm))
+
             lines.append(row.map(quote).joined(separator: ";"))
         }
         return lines.joined(separator: "\n") + "\n"
@@ -86,31 +89,3 @@ enum ReportNaming {
     }
 }
 
-/// Minimal RIFF/WAVE header reader: enough to get duration without
-/// touching the audio payload.
-enum WAVInfo {
-    static func durationSeconds(of url: URL) -> Double? {
-        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? h.close() }
-        guard let head = try? h.read(upToCount: 64 * 1024), head.count >= 12,
-              head[0..<4] == Data("RIFF".utf8), head[8..<12] == Data("WAVE".utf8)
-        else { return nil }
-
-        var byteRate: UInt32 = 0
-        var dataSize: UInt32 = 0
-        var i = 12
-        while i + 8 <= head.count {
-            let id = String(decoding: head[i..<i+4], as: UTF8.self)
-            let size = head[i+4..<i+8].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            if id == "fmt ", i + 16 <= head.count {
-                byteRate = head[i+16..<i+20].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            } else if id == "data" {
-                dataSize = size
-                break
-            }
-            i += 8 + Int(size) + (Int(size) & 1)
-        }
-        guard byteRate > 0, dataSize > 0 else { return nil }
-        return Double(dataSize) / Double(byteRate)
-    }
-}

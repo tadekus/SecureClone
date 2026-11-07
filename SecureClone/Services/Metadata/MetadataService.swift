@@ -73,9 +73,14 @@ enum MetadataService {
                 m.fillMissing(from: fromAV(r, base: m))
             }
         case .audio:
-            if ext == "wav" || ext == "bwf" {
-                m.durationSeconds = WAVInfo.durationSeconds(of: url)
-                m.codec = WAVInfo.describe(url) ?? "Linear PCM"
+            if ext == "wav" || ext == "bwf", let w = WAVReader.read(url) {
+                m.durationSeconds = w.durationSeconds
+                m.codec = w.formatDescription ?? "Linear PCM"
+                if let tc = w.timecode() {
+                    m.tcStart = tc.start
+                    m.tcEnd = tc.end
+                    if let f = w.timecodeFPS { m.fps = Timecode.fpsString(f) }
+                }
             }
         case .still:
             let s = StillExtractor.metadata(fileAt: url)
@@ -179,7 +184,12 @@ enum MetadataService {
                 t.draw(in: NSRect(x: x + (cellW - w) / 2, y: thumbRect.minY + (cellH - h) / 2, width: w, height: h))
             }
             (c.name as NSString).draw(in: NSRect(x: x, y: thumbRect.minY - 16, width: cellW, height: 14), withAttributes: labelAttrs)
-            let sub = [c.resolution, c.fps.map { "\($0) fps" }, c.codec, c.tcStart].compactMap { $0 }.joined(separator: "  ·  ")
+            var subParts: [String] = []
+            if let r = c.resolution { subParts.append(r) }
+            if let f = c.fps { subParts.append("\(f) fps") }
+            if let k = c.codec { subParts.append(k) }
+            if let t = c.tcStart { subParts.append(t) }
+            let sub = subParts.joined(separator: "  ·  ")
             (sub as NSString).draw(in: NSRect(x: x, y: thumbRect.minY - 30, width: cellW, height: 12), withAttributes: subAttrs)
         }
         img.unlockFocus()
@@ -195,24 +205,3 @@ enum MetadataService {
     }
 }
 
-extension WAVInfo {
-    /// "Linear PCM, 24 bit little-endian signed integer, 4 channels, 48000 Hz"
-    static func describe(_ url: URL) -> String? {
-        guard let h = try? FileHandle(forReadingFrom: url),
-              let head = try? h.read(upToCount: 4096), head.count >= 36,
-              head[0..<4] == Data("RIFF".utf8), head[8..<12] == Data("WAVE".utf8) else { return nil }
-        var i = 12
-        while i + 8 <= head.count {
-            let id = String(decoding: head[i..<i+4], as: UTF8.self)
-            let size = Int(head[i+4..<i+8].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
-            if id == "fmt ", i + 24 <= head.count {
-                let ch   = head[i+10..<i+12].withUnsafeBytes { $0.loadUnaligned(as: UInt16.self) }
-                let rate = head[i+12..<i+16].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-                let bits = head[i+22..<i+24].withUnsafeBytes { $0.loadUnaligned(as: UInt16.self) }
-                return "Linear PCM, \(bits) bit little-endian signed integer, \(ch) channels, \(rate) Hz"
-            }
-            i += 8 + size + (size & 1)
-        }
-        return nil
-    }
-}
