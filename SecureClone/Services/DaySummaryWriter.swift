@@ -62,11 +62,21 @@ enum DaySummaryWriter {
         // CSV
         var c = ["Time;Reel;Camera;System;Source;Files;Bytes;Destinations;Folders;Verified;Duration (s);App"]
         for e in entries {
-            c.append([time.string(from: e.date), e.reel, e.camera ?? "", e.system, e.sourceName,
-                      String(e.fileCount), String(e.totalBytes), e.destinations.joined(separator: " | "),
-                      e.destinationFolders.joined(separator: " | "), e.verified ? "yes" : "no",
-                      String(Int(e.durationSeconds)), e.appVersion]
-                .map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }.joined(separator: ";"))
+            // Built step by step — a long array literal times out the type-checker.
+            var f: [String] = []
+            f.append(time.string(from: e.date))
+            f.append(e.reel)
+            f.append(e.camera ?? "")
+            f.append(e.system)
+            f.append(e.sourceName)
+            f.append(String(e.fileCount))
+            f.append(String(e.totalBytes))
+            f.append(e.destinations.joined(separator: " | "))
+            f.append(e.destinationFolders.joined(separator: " | "))
+            f.append(e.verified ? "yes" : "no")
+            f.append(String(Int(e.durationSeconds)))
+            f.append(e.appVersion)
+            c.append(f.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }.joined(separator: ";"))
         }
         return (l.joined(separator: "\n") + "\n", c.joined(separator: "\n") + "\n")
     }

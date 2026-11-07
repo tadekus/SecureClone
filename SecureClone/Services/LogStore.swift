@@ -73,7 +73,7 @@ final class LogStore: ObservableObject {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
             }
             fileHandle = try? FileHandle(forWritingTo: url)
-            try? fileHandle?.seekToEnd()
+            _ = try? fileHandle?.seekToEnd()
             fileDay = day
         }
         let s = "\(LogFormat.full.string(from: line.time))  \(line.text)\n"
