@@ -74,6 +74,13 @@ final class CloneJob: ObservableObject, Identifiable {
     @Published var etaSeconds: Double? = nil        // nil until we have a stable estimate
     @Published var elapsedSeconds: Double = 0
 
+    // Verification phase progress (bytes re-read across ALL destinations).
+    @Published var verifyBytesDone: Int64 = 0
+    var verifyTotalBytes: Int64 = 0
+    var verifyProgress: Double {
+        verifyTotalBytes > 0 ? min(1, Double(verifyBytesDone) / Double(verifyTotalBytes)) : 0
+    }
+
     var totalBytes: Int64 = 0
     var bytesProcessed: Int64 = 0
 

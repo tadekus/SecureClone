@@ -8,7 +8,7 @@
 
 import Foundation
 
-struct ScannedFile {
+struct ScannedFile: Sendable {
     let url: URL            // absolute source URL
     let relativePath: String // path relative to source root
     let size: Int64

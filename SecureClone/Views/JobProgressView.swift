@@ -84,6 +84,16 @@ struct JobHeader: View {
 
             ProgressView(value: job.overallProgress)
 
+            if job.state == .verifying || job.state == .completed {
+                HStack {
+                    Text("Verification").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.0f%%", job.verifyProgress * 100))
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+                ProgressView(value: job.verifyProgress).tint(.green)
+            }
+
             if showStats {
                 HStack(spacing: 18) {
                     stat("Speed",   job.speedText,  icon: "speedometer")
@@ -143,8 +153,13 @@ struct DestinationProgressRow: View {
                     .foregroundStyle(progress.failed ? .red : .green)
                 Text(progress.volume.name).bold()
                 Spacer()
-                Text("\(progress.verifiedCount)/\(progress.filesCompleted) verified")
-                    .font(.caption).foregroundStyle(.secondary)
+                if progress.verifiedCount > 0 || progress.failed {
+                    Text("\(progress.verifiedCount)/\(progress.filesCompleted) verified")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("\(progress.filesCompleted) files written")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             ProgressView(value: fraction)
                 .tint(progress.failed ? .red : .green)

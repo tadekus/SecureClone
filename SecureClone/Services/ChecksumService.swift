@@ -18,7 +18,7 @@ import CryptoKit
 import xxHash_Swift
 #endif
 
-enum HashAlgorithm: String, CaseIterable, Identifiable {
+enum HashAlgorithm: String, CaseIterable, Identifiable, Sendable {
     case xxh64  = "xxHash64"
     case md5    = "MD5"
     case sha256 = "SHA-256"

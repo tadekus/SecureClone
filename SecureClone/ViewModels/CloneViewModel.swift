@@ -60,42 +60,81 @@ final class CloneViewModel: ObservableObject {
                 }
             }
 
-            // 2. Clone + verify, file by file
+            // 2. COPY PHASE — pipelined: read once, every drive writes concurrently.
             job.state = .copying
-            var outcomes: [FileCloneOutcome] = []
-            let destCount = max(job.destinations.count, 1)
-            _ = destCount
-
-            // Throttle UI updates: accumulate bytes off the main actor and
-            // publish at most ~10×/sec instead of once per 8 MB chunk. A poller
-            // keeps the bar moving smoothly even within a single huge file.
-            let progress = ProgressThrottle()
             job.copyStartedAt = Date()
+
+            // Progress bytes are accumulated off the main actor; a poller
+            // publishes them ~4×/sec so the bar moves even inside one huge file.
+            let progress = ProgressThrottle()
             let poller = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
                     guard let self, let j = self.job else { break }
                     j.recordProgress(bytes: progress.snapshot())
-                    try? await Task.sleep(nanoseconds: 250_000_000) // 250 ms
+                    try? await Task.sleep(nanoseconds: 250_000_000)
                 }
             }
             defer { poller.cancel() }
 
+            let engine = self.engine
+            let algorithm = job.algorithm
+            var copied: [CopiedFile] = []
+
             for file in files {
                 job.currentFile = file.relativePath
+                // Blocking disk I/O runs off the main actor.
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try engine.copyFile(source: file,
+                                        destinationRoots: destinationRoots,
+                                        algorithm: algorithm,
+                                        onChunk: { progress.add($0) })
+                }.value
+                copied.append(result)
 
-                let outcome = try await engine.cloneFile(
-                    source: file,
-                    destinationRoots: destinationRoots,
-                    algorithm: job.algorithm,
-                    onChunk: { chunkBytes in
-                        progress.add(chunkBytes)
-                    }
-                )
+                for dp in job.destinationProgress {
+                    dp.filesCompleted += 1
+                    dp.bytesCompleted += file.size
+                }
+                appendLog("→ \(file.relativePath)  [\(result.sourceHash)]")
+            }
 
-                // (Live progress is published by the poller above.)
-                outcomes.append(outcome)
+            poller.cancel()
+            job.bytesProcessed = job.totalBytes
+            job.overallProgress = 1.0
+            job.etaSeconds = 0
+            if let start = job.copyStartedAt {
+                job.elapsedSeconds = Date().timeIntervalSince(start)
+            }
+            appendLog("Copy complete in \(job.elapsedText). Verifying all destinations in parallel…")
 
-                // Update per-file + per-destination UI state.
+            // 3. VERIFY PHASE — every destination re-read concurrently.
+            job.state = .verifying
+            job.currentFile = ""
+            job.verifyTotalBytes = job.totalBytes * Int64(max(1, job.destinations.count))
+            job.verifyBytesDone = 0
+
+            let verifyProgress = ProgressThrottle()
+            let verifyPoller = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    guard let self, let j = self.job else { break }
+                    j.verifyBytesDone = verifyProgress.snapshot()
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+            }
+
+            let copiedSnapshot = copied
+            let outcomes = await Task.detached(priority: .userInitiated) {
+                engine.verify(copied: copiedSnapshot,
+                              destinationRoots: destinationRoots,
+                              algorithm: algorithm,
+                              onFileVerified: nil,
+                              onBytes: { verifyProgress.add(Int($0)) })
+            }.value
+            verifyPoller.cancel()
+            job.verifyBytesDone = job.verifyTotalBytes
+
+            // Publish per-file + per-destination results.
+            for outcome in outcomes {
                 var fr = FileResult(relativePath: outcome.relativePath, size: outcome.size)
                 fr.sourceHash = outcome.sourceHash
                 fr.destinationHashes = outcome.destinationHashes
@@ -104,27 +143,15 @@ final class CloneViewModel: ObservableObject {
 
                 for dp in job.destinationProgress {
                     if let ok = outcome.verified[dp.volume.url] {
-                        dp.filesCompleted += 1
-                        dp.bytesCompleted += outcome.size
                         if ok { dp.verifiedCount += 1 } else { dp.failed = true }
                     }
                 }
-
-                let mark = outcome.allVerified ? "✓" : "✗"
-                appendLog("\(mark) \(outcome.relativePath)  [\(outcome.sourceHash)]")
+                if !outcome.allVerified {
+                    appendLog("✗ MISMATCH \(outcome.relativePath)")
+                }
             }
 
-            // Stop the progress poller and pin the bar to 100%.
-            poller.cancel()
-            job.bytesProcessed = job.totalBytes
-            job.overallProgress = 1.0
-            job.etaSeconds = 0
-            if let start = job.copyStartedAt {
-                job.elapsedSeconds = Date().timeIntervalSince(start)
-            }
-
-            // 3. Verify summary + write reports
-            job.state = .verifying
+            // 4. Write reports
             let finishDate = Date()
 
             for dest in job.destinations {
