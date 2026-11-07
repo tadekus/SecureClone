@@ -84,6 +84,11 @@ final class CloneJob: ObservableObject, Identifiable {
     @Published var finalReport: String? = nil
     /// Where reports were written, for "Reveal in Finder".
     @Published var reportLocations: [URL] = []
+    /// Per-clip metadata + thumbnails (filled after verification).
+    @Published var clips: [ClipMetadata] = []
+    @Published var thumbnailsDone: Int = 0
+    @Published var thumbnailsTotal: Int = 0
+
     /// Files skipped because a previous session had already copied them.
     var resumedFileCount: Int = 0
 

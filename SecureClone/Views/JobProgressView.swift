@@ -7,6 +7,9 @@ import SwiftUI
 
 struct JobProgressView: View {
     @ObservedObject var vm: CloneViewModel
+    @State private var pane: Pane = .log
+
+    enum Pane: String, CaseIterable { case log = "Log", clips = "Clips" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -23,7 +26,13 @@ struct JobProgressView: View {
                 .frame(maxHeight: 220)
 
                 Divider()
-                logView
+                Picker("", selection: $pane) {
+                    ForEach(Pane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                .onChange(of: job.clips.count) { _, n in if n > 0 { pane = .clips } }
+
+                if pane == .log { logView } else { ClipGridView(job: job) }
             } else {
                 ContentUnavailableView(
                     "No active job",
@@ -37,7 +46,6 @@ struct JobProgressView: View {
 
     private var logView: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Log").font(.headline)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {

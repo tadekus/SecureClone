@@ -36,6 +36,7 @@ final class CloneViewModel: ObservableObject {
 
     private let engine = CloneEngine()
     private var control = CloneControl()
+    private var thumbnailTask: Task<Void, Never>? = nil
 
     var canStart: Bool {
         selectedSource != nil && !selectedDestinations.isEmpty && !isRunning
@@ -92,9 +93,46 @@ final class CloneViewModel: ObservableObject {
 
     /// Clear the finished / stopped job so a new one can be configured.
     func reset() {
+        thumbnailTask?.cancel()
+        thumbnailTask = nil
         job = nil
         logTail = []
         showSummary = false
+    }
+
+    private func startThumbnailPass(job: CloneJob, root: URL, destinationRoots: [URL],
+                                    sourceRoot: URL?, jobName: String, finishDate: Date) {
+        let targets = job.clips.filter {
+            let k = MediaKind.of(URL(fileURLWithPath: $0.relativePath)); return k == .video || k == .still
+        }
+        job.thumbnailsTotal = targets.count
+        job.thumbnailsDone = 0
+        guard !targets.isEmpty else { return }
+        appendLog("Generating \(targets.count) thumbnails in the background…")
+
+        thumbnailTask?.cancel()
+        thumbnailTask = Task { [weak self, weak job] in
+            let clips = job?.clips ?? []
+            await MetadataService.thumbnails(clips: clips, root: root) { path, data in
+                guard let job else { return }
+                if let i = job.clips.firstIndex(where: { $0.relativePath == path }) {
+                    job.clips[i].thumbnailJPEG = data
+                }
+                job.thumbnailsDone += 1
+            }
+            guard !Task.isCancelled, let self, let job else { return }
+            var written = 0
+            for r in destinationRoots + (sourceRoot.map { [$0] } ?? []) {
+                if (try? MetadataService.writeContactSheet(clips: job.clips, to: r,
+                                                           jobName: jobName, finishDate: finishDate)) != nil {
+                    written += 1
+                }
+            }
+            let missing = job.thumbnailsTotal - job.thumbnailsDone
+            self.appendLog("Thumbnails done: \(job.thumbnailsDone)/\(job.thumbnailsTotal)"
+                           + (missing > 0 ? " (\(missing) not decodable — ARRIRAW/RED need Phase 3)" : "")
+                           + ". Contact sheet written to \(written) location\(written == 1 ? "" : "s").")
+        }
     }
 
     // MARK: - Run
@@ -256,14 +294,23 @@ final class CloneViewModel: ObservableObject {
                 if !outcome.allVerified { appendLog("✗ MISMATCH \(outcome.relativePath)") }
             }
 
-            // 5. REPORTS — MHL + TXT + CSV on every destination, optionally the source.
+            // 5. METADATA — from the verified copy on the first destination.
+            appendLog("Reading clip metadata…")
+            let metaRoot = destinationRoots[0]
+            let outcomesSnapshot = outcomes
+            let clips = await MetadataService.metadata(outcomes: outcomesSnapshot, root: metaRoot)
+            job.clips = clips
+            let withMeta = clips.filter { $0.isMediaClip && ($0.fps != nil || $0.resolution != nil || $0.durationSeconds != nil) }.count
+            let aleCount = outcomesSnapshot.filter { $0.relativePath.lowercased().hasSuffix(".ale") }.count
+            appendLog("Metadata: \(withMeta) clips\(aleCount > 0 ? " (\(aleCount) ALE sidecar\(aleCount == 1 ? "" : "s") used)" : "").")
+
+            // 6. REPORTS — MHL + TXT + CSV on every destination, optionally the source.
             let finishDate = Date()
             let report = LogWriter.makeReport(jobName: jobName, source: job.source,
                                               destinations: job.destinations, outcomes: outcomes,
                                               algorithm: algorithm, startDate: startDate,
                                               finishDate: finishDate)
-            let csv = CSVReportWriter.make(outcomes: outcomes, sourceRoot: job.source.url,
-                                           algorithm: algorithm)
+            let csv = CSVReportWriter.make(outcomes: outcomes, metadata: clips, algorithm: algorithm)
             var locations: [URL] = []
             for dest in job.destinations {
                 try MHLWriter.write(destinationRoot: dest.url, outcomes: outcomes, algorithm: algorithm,
@@ -295,6 +342,11 @@ final class CloneViewModel: ObservableObject {
             appendLog(ok ? "✅ ALL DESTINATIONS VERIFIED — SAFE TO WIPE SOURCE"
                          : "❌ VERIFICATION FAILED — DO NOT WIPE SOURCE")
             showSummary = true
+
+            // 7. THUMBNAILS — background, from the verified copy; contact sheet at the end.
+            startThumbnailPass(job: job, root: metaRoot, destinationRoots: destinationRoots,
+                               sourceRoot: saveReportToSource ? job.source.url : nil,
+                               jobName: jobName, finishDate: finishDate)
 
         } catch CloneEngineError.cancelled {
             job.state = .stopped

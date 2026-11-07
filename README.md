@@ -65,8 +65,11 @@ Each destination drive (and optionally the source card) gets a
 - `.txt` — human-readable report ending in either
   `SAFE TO WIPE SOURCE` or `DO NOT WIPE SOURCE`
 - `.csv` — Silverstack-style clip list (semicolon-separated, `XXH64BE:` hashes)
-  that matches the other DIT tools' exports. Camera-metadata columns are empty
-  until per-format header parsing (ARRI MXF, RED R3D…) is added.
+  that matches the other DIT tools' exports, with camera metadata filled from:
+  ARRI `.ale` sidecars (EI, shutter, ND, fps, TC, LUT) › MXF header (TC,
+  resolution, fps, codec) › AVFoundation for MOV/MP4/ProRes › ImageIO for DNG.
+- `_thumbs.jpg` — contact sheet of clip thumbnails (MOV/MP4/ProRes/DNG; ARRIRAW
+  and RED decoding is Phase 3). Generated in the background after the summary.
 
 ## Pause / Stop / Resume
 

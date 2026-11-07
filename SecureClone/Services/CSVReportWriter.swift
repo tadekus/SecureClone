@@ -8,10 +8,8 @@
 //    - clip names shown without extension, sidecars with extension
 //
 //  Columns match the sample from set exactly so it drops into the same
-//  spreadsheets as the other DIT tools' exports. Camera-metadata columns
-//  (FPS, ISO, TC, LUT, codec, resolution) need per-format header parsing
-//  (ARRI MXF, RED R3D, …) and are left empty until that's implemented.
-//  Duration is filled for WAV audio (read from the header).
+//  spreadsheets as the other DIT tools' exports. Values come from
+//  MetadataService (ALE sidecar > MXF header > AVFoundation / ImageIO).
 //
 
 import Foundation
@@ -24,34 +22,27 @@ enum CSVReportWriter {
         "Resolution (original)", "Hash Values"
     ]
 
-    /// Extensions treated as "clips": listed by name without extension.
-    private static let clipExtensions: Set<String> = [
-        "mxf", "mov", "mp4", "mkv", "avi", "braw", "r3d", "ari", "arx",
-        "wav", "bwf", "aif", "aiff", "crm", "mts", "m2ts"
-    ]
-
     static func make(outcomes: [FileCloneOutcome],
-                     sourceRoot: URL,
+                     metadata: [ClipMetadata],
                      algorithm: HashAlgorithm) -> String {
         var lines: [String] = [header.joined(separator: ";")]
+        let byPath = Dictionary(uniqueKeysWithValues: metadata.map { ($0.relativePath, $0) })
 
         for o in outcomes.sorted(by: { $0.relativePath < $1.relativePath }) {
-            let url = sourceRoot.appendingPathComponent(o.relativePath)
-            let ext = url.pathExtension.lowercased()
-            let name = clipExtensions.contains(ext)
-                ? url.deletingPathExtension().lastPathComponent
-                : url.lastPathComponent
-
-            let duration: String
-            if ext == "wav" || ext == "bwf", let secs = WAVInfo.durationSeconds(of: url) {
-                duration = String(Int(secs.rounded()))
-            } else {
-                duration = ""
-            }
-
+            let m = byPath[o.relativePath]
+            let name = m?.name ?? (o.relativePath as NSString).lastPathComponent
             let row = [
-                name, duration,
-                "", "", "", "", "", "", "", "", "",       // camera metadata: TODO
+                name,
+                m?.durationDisplay ?? "",
+                m?.fps ?? "",
+                m?.exposureIndex ?? "",
+                m?.ndFilter ?? "",
+                m?.shutterDisplay ?? "",
+                m?.tcStart ?? "",
+                m?.tcEnd ?? "",
+                m?.lutNodes ?? "",
+                m?.codec ?? "",
+                m?.resolution ?? "",
                 hashField(o.sourceHash, algorithm: algorithm)
             ]
             lines.append(row.map(quote).joined(separator: ";"))
