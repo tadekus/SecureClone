@@ -3,6 +3,45 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.0 — 2026-11-08
+A "card-ingest station" release: the app now runs a queue, names folders
+for you, notices cards it has seen before, and can verify drives on its own.
+### Added
+- **Job queue.** Press Start (or Queue) while a job runs and the card waits
+  its turn; jobs run back to back. Pending jobs are listed and removable.
+- **Auto-start & auto-eject.** Insert a card → it is detected, named and
+  queued against the remembered destinations; a verified card can be ejected
+  automatically. Eject buttons on every volume row and in the summary.
+- **Reel / camera detection** for ARRI, RED, Blackmagic, DJI, Sony and Canon
+  card layouts; pre-fills reel, camera and job name.
+- **Naming template** `{project}/{day}/{camera}/{reel}` (also `{date}`, `{job}`,
+  `{card}`) builds the destination folder; live preview. Project and day are
+  remembered between runs.
+- **Source subfolder and per-destination base folder** pickers (default: whole
+  card → drive root).
+- **Skip identical files.** When the target folder already holds a file with
+  the same size and a matching verified hash (from an MHL there), the source is
+  hashed and, if equal, the write is skipped. Skipped files are still
+  re-verified from disk and counted in the report.
+- **Duplicate-card guard.** Warns when a card with the same reel, file count
+  and size was already verified in the last 7 days.
+- **Blocking free-space check** before copying, with the exact shortfall.
+- **Verify-only mode.** Pick a drive, choose one of the MHLs found on it (or
+  any .mhl file), re-hash every listed file and get a verification report.
+  Reads MHLs from other tools too.
+- **Shooting-day summary** (`DAY_<date>_SUMMARY.txt/.csv`) regenerated after
+  every job on each destination: all cards, totals, per camera, per drive.
+- **Verification progress** has its own percentage, speed, ETA and elapsed.
+- **Searchable log** with export, copy and Follow; persisted to
+  `~/Library/Application Support/SecureClone/logs/<date>.log`.
+- **Jobs** tab listing finished jobs with their reports.
+- **Menu-bar item** with live progress and pause/stop; the app keeps running
+  when the window is closed; quitting mid-job asks first.
+- **Sleep prevention** while a job runs.
+### Changed
+- Reports and MHLs live in `<destination folder>/SecureClone_Logs/`; the day
+  summary at the drive root's `SecureClone_Logs/`.
+
 ## 1.5 — 2026-11-07
 ### Added
 - Timecode for production audio: Broadcast WAV `bext` TimeReference at the

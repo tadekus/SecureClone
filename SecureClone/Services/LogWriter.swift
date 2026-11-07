@@ -23,31 +23,41 @@ enum LogWriter {
         outcomes: [FileCloneOutcome],
         algorithm: HashAlgorithm,
         startDate: Date,
-        finishDate: Date
+        finishDate: Date,
+        destinationFolders: [URL] = [],
+        skipped: Int = 0,
+        sourceFolder: URL? = nil
     ) -> String {
         var lines: [String] = []
         lines.append("\(AppInfo.fullName) — Job Report")
         lines.append("======================")
         lines.append("Job:        \(jobName)")
         lines.append("Started:    \(stamp.string(from: startDate))")
-        lines.append("Source:     \(source.url.path)  (\(source.name), \(source.totalCapacityFormatted))")
+        lines.append("Source:     \((sourceFolder ?? source.url).path)  (\(source.name), \(source.totalCapacityFormatted))")
         lines.append("Algorithm:  \(algorithm.rawValue)")
+        lines.append("Host:       \(Host.current().localizedName ?? "unknown")  user \(NSUserName())")
         lines.append("")
         lines.append("Destinations:")
 
         var allGood = true
-        for dest in destinations {
-            let forDest = outcomes.compactMap { o -> Bool? in o.verified[dest.url] }
+        for (i, dest) in destinations.enumerated() {
+            let key = i < destinationFolders.count ? destinationFolders[i] : dest.url
+            let folder = key.path
+            let forDest = outcomes.compactMap { o -> Bool? in o.verified[key] }
             let files = forDest.count
             let okCount = forDest.filter { $0 }.count
             let bytes = outcomes
-                .filter { $0.verified[dest.url] != nil }
+                .filter { $0.verified[key] != nil }
                 .reduce(Int64(0)) { $0 + $1.size }
             let ok = (okCount == files && files > 0)
             if !ok { allGood = false }
             let mark = ok ? "[✓]" : "[✗]"
             let status = ok ? "VERIFIED" : "FAILED (\(okCount)/\(files) ok)"
-            lines.append("  \(mark) \(dest.url.path)   \(files) files   \(VolumeInfo.format(bytes))   \(status)")
+            lines.append("  \(mark) \(folder)   \(files) files   \(VolumeInfo.format(bytes))   \(status)")
+        }
+        if skipped > 0 {
+            lines.append("")
+            lines.append("Skipped:     \(skipped) files already present with identical verified hashes (re-verified)")
         }
 
         lines.append("")

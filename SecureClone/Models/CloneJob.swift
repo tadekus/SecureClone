@@ -67,12 +67,24 @@ final class DestinationProgress: Identifiable, ObservableObject {
     init(volume: VolumeInfo) { self.volume = volume }
 }
 
+enum JobKind { case offload, verifyOnly }
+
 final class CloneJob: ObservableObject, Identifiable {
     let id = UUID()
+    let kind: JobKind
     let source: VolumeInfo
     let destinations: [VolumeInfo]
     let algorithm: HashAlgorithm
     let startedAt: Date = Date()
+    /// The spec this job was created from (offload jobs).
+    var spec: JobSpec? = nil
+    /// Actual folders written to, one per destination (root + naming template).
+    var destinationFolders: [URL] = []
+    /// Files skipped because an identical verified copy already existed.
+    var skippedFileCount: Int = 0
+    var skippedBytes: Int64 = 0
+    /// Verify-only: the MHL being checked.
+    var mhlURL: URL? = nil
 
     @Published var state: JobState = .idle
     @Published var overallProgress: Double = 0      // 0…1 across all bytes
@@ -97,11 +109,52 @@ final class CloneJob: ObservableObject, Identifiable {
     @Published var etaSeconds: Double? = nil        // nil until we have a stable estimate
     @Published var elapsedSeconds: Double = 0
 
-    // Verification phase progress (bytes re-read across ALL destinations).
+    // Verification phase progress (bytes re-read across ALL destinations),
+    // with its own speed / ETA so the stats row stays live while verifying.
     @Published var verifyBytesDone: Int64 = 0
+    @Published var verifyBytesPerSecond: Double = 0
+    @Published var verifyEtaSeconds: Double? = nil
+    @Published var verifyElapsedSeconds: Double = 0
     var verifyTotalBytes: Int64 = 0
+    var verifyStartedAt: Date? = nil
+    private var verifyLastSampleTime: Date? = nil
+    private var verifyLastSampleBytes: Int64 = 0
+
     var verifyProgress: Double {
         verifyTotalBytes > 0 ? min(1, Double(verifyBytesDone) / Double(verifyTotalBytes)) : 0
+    }
+    var verifyPercentText: String { String(format: "%.1f%%", verifyProgress * 100) }
+    var verifySpeedText: String {
+        guard verifyBytesPerSecond > 0 else { return "—" }
+        return VolumeInfo.format(Int64(verifyBytesPerSecond)) + "/s"
+    }
+    var verifyEtaText: String {
+        guard let e = verifyEtaSeconds else { return "calculating…" }
+        return Self.formatDuration(e)
+    }
+    var verifyElapsedText: String { Self.formatDuration(verifyElapsedSeconds) }
+
+    func recordVerifyProgress(bytes: Int64, at now: Date = Date()) {
+        verifyBytesDone = bytes
+        if verifyStartedAt == nil { verifyStartedAt = now }
+        verifyElapsedSeconds = now.timeIntervalSince(verifyStartedAt!)
+        guard let lastT = verifyLastSampleTime else {
+            verifyLastSampleTime = now; verifyLastSampleBytes = bytes; return
+        }
+        let dt = now.timeIntervalSince(lastT)
+        guard dt >= 0.5 else { return }
+        let instant = Double(bytes - verifyLastSampleBytes) / dt
+        verifyBytesPerSecond = verifyBytesPerSecond == 0 ? instant : (0.7 * verifyBytesPerSecond + 0.3 * instant)
+        verifyLastSampleTime = now
+        verifyLastSampleBytes = bytes
+        let remaining = Double(verifyTotalBytes - bytes)
+        verifyEtaSeconds = (verifyBytesPerSecond > 1 && remaining > 0) ? remaining / verifyBytesPerSecond : nil
+    }
+
+    func finishVerifyProgress() {
+        verifyBytesDone = verifyTotalBytes
+        verifyEtaSeconds = 0
+        if let s = verifyStartedAt { verifyElapsedSeconds = Date().timeIntervalSince(s) }
     }
 
     var totalBytes: Int64 = 0
@@ -112,11 +165,17 @@ final class CloneJob: ObservableObject, Identifiable {
     private var lastSampleTime: Date? = nil
     private var lastSampleBytes: Int64 = 0
 
-    init(source: VolumeInfo, destinations: [VolumeInfo], algorithm: HashAlgorithm) {
+    init(source: VolumeInfo, destinations: [VolumeInfo], algorithm: HashAlgorithm,
+         kind: JobKind = .offload) {
+        self.kind = kind
         self.source = source
         self.destinations = destinations
         self.algorithm = algorithm
         self.destinationProgress = destinations.map { DestinationProgress(volume: $0) }
+    }
+
+    var title: String {
+        spec?.jobName ?? (kind == .verifyOnly ? "Verify \(source.name)" : source.name)
     }
 
     var allDestinationsVerified: Bool {

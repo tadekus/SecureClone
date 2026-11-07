@@ -24,17 +24,30 @@ offload tools, in a small open-source app they can build themselves.
 - Source is never written to (except, optionally, a report folder after
   verification) and system cruft (`.DS_Store`, `._*`, Spotlight) is skipped
 
-**Control**
-- Live **progress, speed, ETA** per job and per drive
+**Ingest workflow**
+- **Job queue** — insert the next card while one is copying; it runs next
+- **Auto-start on insert** and **auto-eject when verified**; eject any volume
+  from the app
+- **Reel / camera detection** (ARRI, RED, Blackmagic, DJI, Sony, Canon) and a
+  **naming template** `{project}/{day}/{camera}/{reel}` for destination folders
+- Optional **source subfolder** and **per-destination base folder**
+- **Skip identical files** already verified in the target folder (still
+  re-verified), **duplicate-card guard**, blocking **free-space check**
+- Live **progress, speed, ETA** for copy *and* verification, per job and per drive
 - **Pause / Resume / Stop**; a stopped job checkpoints after every file and
   can be **resumed** later — resumed files are still re-verified
 - Summary sheet on completion with a clear **SAFE TO WIPE / DO NOT WIPE** verdict
+- **Verify-only mode**: re-hash a drive against any MHL on it
+- **Shooting-day summary** across all cards; searchable, persisted **log**;
+  **menu-bar** item that keeps jobs running with the window closed
 
-**Reports** (written to every destination, optionally to the source card)
+**Reports** (in `SecureClone_Logs/` of every destination folder, optionally the card)
 - `.mhl` — ASC Media Hash List v1.1
 - `.txt` — human-readable job report
 - `.csv` — Silverstack-style clip list (`;`-separated, `XXH64BE:` hashes)
 - `_thumbs.jpg` — contact sheet of clip thumbnails
+- `DAY_<date>_SUMMARY.txt/.csv` — all cards of the day (at the drive root)
+- `VERIFY_<manifest>_<date>.txt` — verify-only results
 
 **Clip metadata** (fills the CSV, shown in the in-app clip grid)
 | Source | What it provides |
@@ -116,16 +129,17 @@ Card ─► reader ──┼─► queue ─► writer thread ─► Drive B ─
 
 ```
 SecureClone/
-├── Models/        VolumeInfo, CloneJob, ClipMetadata, AppInfo
+├── Models/        VolumeInfo, CloneJob, JobSpec (naming), ClipMetadata, AppSettings, AppInfo
 ├── Services/
 │   ├── CloneEngine, ChunkQueue, CloneControl     copy pipeline + pause/stop
 │   ├── ChecksumService, StreamingHasher          xxHash64 / MD5 / SHA-256
-│   ├── DriveMonitor, SourceScanner               volumes + file discovery
-│   ├── SessionStore                              resume checkpoints
-│   ├── MHLWriter, LogWriter, CSVReportWriter     reports
+│   ├── DriveMonitor, SourceScanner, ReelDetector volumes, files, reel names
+│   ├── SessionStore, HistoryStore, LogStore      resume, job history, log
+│   ├── MHLWriter, MHLReader, LogWriter,          reports in and out
+│   │   CSVReportWriter, DaySummaryWriter
 │   └── Metadata/  ALEParser, MXFParser, AVExtractor, WAVReader, MetadataService
-├── ViewModels/    CloneViewModel
-└── Views/         ContentView, pickers, JobProgressView, ClipGridView, SummarySheet
+├── ViewModels/    CloneViewModel (queue, prompts, offload + verify runs)
+└── Views/         ContentView, pickers, JobProgressView (log/clips/jobs), ClipGridView, SummarySheet
 ```
 
 ---
@@ -134,8 +148,8 @@ SecureClone/
 
 - **Phase 3 — ARRIRAW & RED thumbnails** via the vendor SDKs (ARRI Image SDK,
   R3D SDK) bridged into Swift
-- Verify-only mode: re-check a drive against its MHL
 - Per-camera metadata for cameras that write no TC track (optional time-of-day TC)
+- Presets (destinations + naming + options), notifications / webhooks
 - Notarized builds (needs an Apple Developer ID)
 - LTO / tar output target
 

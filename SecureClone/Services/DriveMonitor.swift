@@ -13,6 +13,9 @@ import Combine
 
 final class DriveMonitor: ObservableObject {
     @Published private(set) var volumes: [VolumeInfo] = []
+    /// Fires with the newly mounted volume (for auto-start).
+    let mounted = PassthroughSubject<VolumeInfo, Never>()
+    let unmounted = PassthroughSubject<URL, Never>()
 
     private var session: DASession?
     private var mountObserver: NSObjectProtocol?
@@ -39,12 +42,20 @@ final class DriveMonitor: ObservableObject {
         // NSWorkspace gives simple, reliable mount/unmount notifications.
         let nc = NSWorkspace.shared.notificationCenter
         mountObserver = nc.addObserver(forName: NSWorkspace.didMountNotification,
-                                       object: nil, queue: .main) { [weak self] _ in
-            self?.refresh()
+                                       object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            self.refresh()
+            if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL,
+               let v = self.volumes.first(where: { $0.url == url }) {
+                self.mounted.send(v)
+            }
         }
         unmountObserver = nc.addObserver(forName: NSWorkspace.didUnmountNotification,
-                                         object: nil, queue: .main) { [weak self] _ in
+                                         object: nil, queue: .main) { [weak self] note in
             self?.refresh()
+            if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
+                self?.unmounted.send(url)
+            }
         }
 
         refresh()
@@ -90,4 +101,9 @@ final class DriveMonitor: ObservableObject {
 
     /// Removable volumes only — likely camera cards.
     var removableVolumes: [VolumeInfo] { volumes.filter { $0.isRemovable } }
+
+    /// Unmount and eject a volume (e.g. the card after a verified offload).
+    static func eject(_ url: URL) throws {
+        try NSWorkspace.shared.unmountAndEjectDevice(at: url)
+    }
 }

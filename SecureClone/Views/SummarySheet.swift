@@ -10,6 +10,7 @@ import SwiftUI
 import AppKit
 
 struct SummarySheet: View {
+    @EnvironmentObject var vm: CloneViewModel
     @ObservedObject var job: CloneJob
     let onClose: () -> Void
 
@@ -50,6 +51,12 @@ struct SummarySheet: View {
                     }
                 }
                 Spacer()
+                if job.kind == .offload && job.source.isRemovable && success {
+                    Button {
+                        vm.eject(job.source)
+                        onClose()
+                    } label: { Label("Eject \(job.source.name)", systemImage: "eject") }
+                }
                 Button("Copy report") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(job.finalReport ?? "", forType: .string)

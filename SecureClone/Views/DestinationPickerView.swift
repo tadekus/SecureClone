@@ -6,36 +6,51 @@
 import SwiftUI
 
 struct DestinationPickerView: View {
+    @EnvironmentObject var vm: CloneViewModel
     let volumes: [VolumeInfo]
-    let source: VolumeInfo?
-    @Binding var selection: Set<VolumeInfo>
 
     /// Don't allow the source to also be a destination.
     private var candidates: [VolumeInfo] {
-        volumes.filter { $0 != source }
+        volumes.filter { $0 != vm.selectedSource }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Destinations (\(selection.count))", systemImage: "externaldrive.badge.plus")
+            Label("Destinations (\(vm.selectedDestinations.count))", systemImage: "externaldrive.badge.plus")
                 .font(.headline)
 
             if candidates.isEmpty {
                 Text("No destination drives available.")
                     .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
             } else {
                 ForEach(candidates) { vol in
-                    DriveRow(volume: vol,
-                             isSelected: selection.contains(vol),
-                             accent: .green,
-                             showCheckbox: true) {
-                        if selection.contains(vol) { selection.remove(vol) }
-                        else { selection.insert(vol) }
-                    }
+                    row(vol)
                 }
             }
         }
+    }
+
+    private func row(_ vol: VolumeInfo) -> DriveRow {
+        let selected = vm.selectedDestinations.contains(vol)
+        let base = vm.destinationBases[vol.url]
+        var subtitle: String? = nil
+        if let b = base {
+            let rel = b.path.replacingOccurrences(of: vol.url.path, with: "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            subtitle = "→ \(rel)"
+        }
+        var clearAction: (() -> Void)? = nil
+        if base != nil { clearAction = { vm.clearDestinationFolder(for: vol) } }
+        var ejectAction: (() -> Void)? = nil
+        if vol.isRemovable { ejectAction = { vm.eject(vol) } }
+        return DriveRow(volume: vol, isSelected: selected, accent: .green, showCheckbox: true,
+                        subtitle: subtitle,
+                        onSelect: {
+                            if selected { vm.selectedDestinations.remove(vol) }
+                            else { vm.selectedDestinations.insert(vol) }
+                        },
+                        onFolder: { vm.chooseDestinationFolder(for: vol) },
+                        onClearFolder: clearAction, onEject: ejectAction)
     }
 }
