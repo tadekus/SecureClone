@@ -154,12 +154,24 @@ struct ContentView: View {
                 }
                 .labelsHidden().pickerStyle(.segmented)
             }
+            HStack(alignment: .top) {
+                Text("Verify").foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Picker("", selection: $settings.verificationMode) {
+                        ForEach(VerificationMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .labelsHidden().pickerStyle(.segmented)
+                    Text(settings.verificationMode.summary).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
             Toggle("Auto-start when a card is inserted (uses the selected destinations)", isOn: $settings.autoStart)
             Toggle("Eject the card after it's verified", isOn: $settings.autoEject)
             Toggle("Skip files that already exist with identical verified hashes", isOn: $settings.skipIdentical)
             Toggle("Also save report + CSV to the source card", isOn: $settings.saveReportToSource)
             Toggle("Prevent sleep while a job runs", isOn: $settings.preventSleep)
             Toggle("Show in menu bar (keeps running when the window is closed)", isOn: $settings.showInMenuBar)
+            Toggle("Copy ._ sidecar files (AppleDouble resource forks)", isOn: $settings.copyAppleDouble)
+            Toggle("Allow two backups on the same physical disk (not recommended)", isOn: $settings.allowSamePhysicalDisk)
         }
         .toggleStyle(.checkbox)
         .font(.caption)

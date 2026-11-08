@@ -3,6 +3,32 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.7 — 2026-11-08
+Engine and safety release.
+### Added
+- **Four verification modes**: Quick (copy only, never "safe to wipe"),
+  Standard (hash while reading, re-read every drive), Thorough (+ re-read the
+  card, second MD5 digest in the MHL), Paranoid (+ byte-by-byte compare of
+  every copy against the card).
+- **Source-stability checks**: `fstat` before and after each file — size,
+  modification time and inode must not change, and every byte must have been
+  read — otherwise the copy is rejected as "source changed during copy".
+- **Durability**: `F_FULLFSYNC` on every file (pushes data past the drive's own
+  cache; falls back to `fsync` on ExFAT) and an fsync of the directory after
+  publishing the name.
+- **Temp-file-then-atomic-rename**: files are written as `.name.sc-partial`
+  and renamed only after the full flush; leftovers are removed at start.
+- **Safety validator**: refuses a destination on the same physical disk as the
+  source, two backups on one physical disk (override in Options), nesting,
+  symlinked paths, and online-only iCloud/Dropbox placeholders (`SF_DATALESS`).
+- **Link detection via IOKit**: every volume shows its bus (USB 5/10/20 Gb/s,
+  USB 2.0, Thunderbolt, internal); USB 2 links are flagged and logged.
+- **Crash evidence**: an active-run journal records phase, files copied and
+  files verified; an interrupted run is reported at the next launch and added
+  to history as unverified.
+- Option to copy and verify `._` AppleDouble sidecars.
+- Skip-identical now also works without an MHL by hashing the existing copy.
+
 ## 2.6 — 2026-11-08
 ### Changed
 - **Copy path rewritten for sustained throughput on large files.** Reads and

@@ -26,7 +26,8 @@ enum LogWriter {
         finishDate: Date,
         destinationFolders: [URL] = [],
         skipped: Int = 0,
-        sourceFolder: URL? = nil
+        sourceFolder: URL? = nil,
+        mode: VerificationMode = .standard
     ) -> String {
         var lines: [String] = []
         lines.append("\(AppInfo.fullName) — Job Report")
@@ -34,7 +35,8 @@ enum LogWriter {
         lines.append("Job:        \(jobName)")
         lines.append("Started:    \(stamp.string(from: startDate))")
         lines.append("Source:     \((sourceFolder ?? source.url).path)  (\(source.name), \(source.totalCapacityFormatted))")
-        lines.append("Algorithm:  \(algorithm.rawValue)")
+        lines.append("Algorithm:  \(algorithm.rawValue)" + (mode.secondHash ? " + MD5" : ""))
+        lines.append("Mode:       \(mode.rawValue) — \(mode.summary)")
         lines.append("Host:       \(Host.current().localizedName ?? "unknown")  user \(NSUserName())")
         lines.append("")
         lines.append("Destinations:")
@@ -101,9 +103,22 @@ enum LogWriter {
         lines.append("Completed:   \(stamp.string(from: finishDate))")
         lines.append("Duration:    \(formatDuration(finishDate.timeIntervalSince(startDate)))")
         lines.append("")
-        lines.append("Result:      " + (allGood
-            ? "ALL DESTINATIONS VERIFIED — SAFE TO WIPE SOURCE"
-            : "VERIFICATION FAILED — DO NOT WIPE SOURCE"))
+        if mode.rereadsSource {
+            let bad = outcomes.filter { $0.sourceRereadOK == false }.count
+            lines.append("Card re-read: " + (bad == 0 ? "every file hashed identically on a second read of the card" : "\(bad) file(s) hashed DIFFERENTLY on re-read — the card read unreliably"))
+        }
+        if mode.byteCompare {
+            let bad = outcomes.filter { $0.byteCompareOK.values.contains(false) }.count
+            lines.append("Byte compare: " + (bad == 0 ? "every copy byte-identical to the source" : "\(bad) copy/copies differ byte-for-byte"))
+        }
+        lines.append("")
+        if !mode.hashes {
+            lines.append("Result:      COPIED IN QUICK MODE — NOT VERIFIED. DO NOT WIPE THE SOURCE ON THIS REPORT.")
+        } else {
+            lines.append("Result:      " + (allGood
+                ? "ALL DESTINATIONS VERIFIED (\(mode.rawValue.uppercased())) — SAFE TO WIPE SOURCE"
+                : "VERIFICATION FAILED — DO NOT WIPE SOURCE"))
+        }
 
         return lines.joined(separator: "\n") + "\n"
     }

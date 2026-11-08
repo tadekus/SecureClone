@@ -28,12 +28,22 @@ struct FileCloneOutcome: Sendable {
     var copyStartedAt: Date? = nil
     var copySeconds: Double = 0
     var verifySeconds: Double = 0
+    // Thorough / Paranoid extras
+    var sourceHashMD5: String? = nil           // second digest of the source (inline)
+    var sourceRereadHash: String? = nil        // source hashed again after the copy
+    var sourceRereadOK: Bool? = nil
+    var destinationMD5: [URL: String] = [:]
+    var byteCompareOK: [URL: Bool] = [:]
+    var mode: VerificationMode = .standard
 
     var copyMBps: Double { copySeconds > 0 ? Double(size) / copySeconds / 1_000_000 : 0 }
 
-    /// True when every destination's hash matched the source.
+    /// True when every check the mode requires passed on every destination.
     var allVerified: Bool {
-        !verified.isEmpty && verified.values.allSatisfy { $0 }
+        guard mode.hashes, !verified.isEmpty, verified.values.allSatisfy({ $0 }) else { return false }
+        if mode.rereadsSource && sourceRereadOK != true { return false }
+        if mode.byteCompare && !(byteCompareOK.count == verified.count && byteCompareOK.values.allSatisfy { $0 }) { return false }
+        return true
     }
 }
 
@@ -42,6 +52,7 @@ enum CloneEngineError: LocalizedError {
     case writeFailed(URL, Error)
     case readFailed(URL, Error)
     case cancelled
+    case sourceChanged(URL, String)
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +60,7 @@ enum CloneEngineError: LocalizedError {
         case .writeFailed(let u, let e):      return "Write failed on \(u.lastPathComponent): \(e.localizedDescription)"
         case .readFailed(let u, let e):       return "Read failed on \(u.lastPathComponent): \(e.localizedDescription)"
         case .cancelled:                      return "Stopped by user"
+        case .sourceChanged(let u, let why):  return "Source changed during copy (\(u.lastPathComponent)): \(why)"
         }
     }
 }
@@ -60,6 +72,7 @@ struct CopiedFile: Sendable {
     let destinationFiles: [URL: URL]   // destination root -> written file
     var startedAt: Date = Date()
     var seconds: Double = 0            // wall time for this file's copy (0 = skipped/resumed)
+    var sourceHashMD5: String? = nil
 
     var mbps: Double { seconds > 0 ? Double(source.size) / seconds / 1_000_000 : 0 }
 }
@@ -85,6 +98,7 @@ final class CloneEngine: @unchecked Sendable {
         source: ScannedFile,
         destinationRoots: [URL],
         algorithm: HashAlgorithm,
+        mode: VerificationMode = .standard,
         control: CloneControl? = nil,
         onChunk: (@Sendable (Int) -> Void)? = nil
     ) throws -> CopiedFile {
@@ -108,14 +122,27 @@ final class CloneEngine: @unchecked Sendable {
         _ = fcntl(srcFD, F_NOCACHE, 1)
         _ = fcntl(srcFD, F_RDAHEAD, 1)
 
+        // Source stability, part 1: what we are about to read.
+        var st0 = stat()
+        guard fstat(srcFD, &st0) == 0 else { throw CloneEngineError.readFailed(source.url, posixError()) }
+        guard Int64(st0.st_size) == source.size else {
+            throw CloneEngineError.sourceChanged(source.url, "size is \(st0.st_size), scanned \(source.size)")
+        }
+
         // Open every destination: cache bypassed, pre-allocated to final size
         // (one contiguous allocation instead of cluster-by-cluster growth —
         // matters on ExFAT).
+        // Written under a temporary name; renamed to the real name only once
+        // flushed to the medium, so a crash can never leave a plausible partial.
         var destFDs: [URL: Int32] = [:]
+        var tempFiles: [URL: URL] = [:]
         for (root, destURL) in destFiles {
-            let fd = open(destURL.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            let tmp = Self.partialURL(for: destURL)
+            tempFiles[root] = tmp
+            let fd = open(tmp.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
             guard fd >= 0 else {
                 for f in destFDs.values { close(f) }
+                for t in tempFiles.values { try? FileManager.default.removeItem(at: t) }
                 throw CloneEngineError.cannotCreateDestination(destURL)
             }
             _ = fcntl(fd, F_NOCACHE, 1)
@@ -157,8 +184,9 @@ final class CloneEngine: @unchecked Sendable {
                         off += n
                     }
                 }
-                if fsync(fd) != 0 {       // data is already on disk (NOCACHE); this is cheap
-                    let e = CloneEngineError.writeFailed(destURL, posixError())
+                // Push the data past the drive's own volatile cache onto the
+                // medium (F_FULLFSYNC); plain fsync only reaches the drive.
+                if let e = CloneEngine.flushToMedium(fd, url: destURL) {
                     q.fail(e); writerErrors.set(e)
                 }
             }
@@ -167,18 +195,19 @@ final class CloneEngine: @unchecked Sendable {
         // Hasher: its own thread and queue, so hashing never serializes
         // with reading or writing.
         let hashQueue = ChunkQueue(capacity: queueDepth)
-        let hasher = StreamingHasher(algorithm: algorithm)
+        let hasher = StreamingHasher(algorithm: algorithm, alsoMD5: mode.secondHash)
         let hashGroup = DispatchGroup()
         hashGroup.enter()
         Thread.detachNewThread {
             defer { hashGroup.leave() }
-            while let chunk = hashQueue.pop() { hasher.update(chunk) }
+            while let chunk = hashQueue.pop() { if mode.hashes { hasher.update(chunk) } }
         }
 
         // Reader: this thread. Read once into a pooled buffer, hand the same
         // chunk to the hasher and every writer.
         var readError: Error? = nil
         var wasCancelled = false
+        var totalRead: Int64 = 0
         while true {
             if let c = control, !c.checkpoint() { wasCancelled = true; break }
             guard let buf = pool.acquire() else { break }
@@ -194,6 +223,7 @@ final class CloneEngine: @unchecked Sendable {
             }
             let chunk = Chunk(base: buf, count: got, pool: pool)
             if readError != nil || got == 0 { break }
+            totalRead += Int64(got)
             hashQueue.push(chunk)
             var anyAlive = false
             for q in queues.values where q.push(chunk) { anyAlive = true }
@@ -212,21 +242,77 @@ final class CloneEngine: @unchecked Sendable {
         // A cancelled or failed file must never be left half-written: a later
         // resume could mistake it for a finished copy.
         if wasCancelled || readError != nil || writerErrors.get() != nil {
-            for destURL in destFiles.values { try? FileManager.default.removeItem(at: destURL) }
+            for t in tempFiles.values { try? FileManager.default.removeItem(at: t) }
         }
         if wasCancelled { throw CloneEngineError.cancelled }
         if let e = readError { throw e }
         if let e = writerErrors.get() { throw e }
 
-        // Restore the original modification date on each copy.
-        if let mod = source.modificationDate {
-            for destURL in destFiles.values {
-                try? FileManager.default.setAttributes([.modificationDate: mod], ofItemAtPath: destURL.path)
-            }
+        // Source stability, part 2: we read exactly what we were told existed,
+        // and the file did not change underneath us meanwhile.
+        var st1 = stat()
+        guard fstat(srcFD, &st1) == 0 else { throw CloneEngineError.readFailed(source.url, posixError()) }
+        if totalRead != source.size {
+            for t in tempFiles.values { try? FileManager.default.removeItem(at: t) }
+            throw CloneEngineError.sourceChanged(source.url, "read \(totalRead) of \(source.size) bytes")
+        }
+        if st1.st_size != st0.st_size || st1.st_mtimespec.tv_sec != st0.st_mtimespec.tv_sec
+            || st1.st_mtimespec.tv_nsec != st0.st_mtimespec.tv_nsec || st1.st_ino != st0.st_ino {
+            for t in tempFiles.values { try? FileManager.default.removeItem(at: t) }
+            throw CloneEngineError.sourceChanged(source.url, "size or modification time changed while reading")
         }
 
-        return CopiedFile(source: source, sourceHash: hasher.finalize(), destinationFiles: destFiles,
-                          startedAt: startedAt, seconds: Date().timeIntervalSince(startedAt))
+        // Restore the original modification date, then publish atomically.
+        for (root, destURL) in destFiles {
+            guard let tmp = tempFiles[root] else { continue }
+            if let mod = source.modificationDate {
+                try? FileManager.default.setAttributes([.modificationDate: mod], ofItemAtPath: tmp.path)
+            }
+            if rename(tmp.path, destURL.path) != 0 {
+                let e = CloneEngineError.writeFailed(destURL, posixError())
+                for t in tempFiles.values { try? FileManager.default.removeItem(at: t) }
+                throw e
+            }
+            Self.syncDirectory(destURL.deletingLastPathComponent())
+        }
+
+        return CopiedFile(source: source, sourceHash: mode.hashes ? hasher.finalize() : "",
+                          destinationFiles: destFiles,
+                          startedAt: startedAt, seconds: Date().timeIntervalSince(startedAt),
+                          sourceHashMD5: hasher.finalizeMD5())
+    }
+
+    /// Temporary name used while a file is being written.
+    static func partialURL(for final: URL) -> URL {
+        final.deletingLastPathComponent().appendingPathComponent("." + final.lastPathComponent + ".sc-partial")
+    }
+
+    /// F_FULLFSYNC where supported (APFS, HFS+), fsync elsewhere (ExFAT returns ENOTSUP).
+    static func flushToMedium(_ fd: Int32, url: URL) -> Error? {
+        if fcntl(fd, F_FULLFSYNC) == 0 { return nil }
+        if errno != ENOTSUP && errno != EOPNOTSUPP && errno != EINVAL {
+            return CloneEngineError.writeFailed(url, posixError())
+        }
+        return fsync(fd) == 0 ? nil : CloneEngineError.writeFailed(url, posixError())
+    }
+
+    /// Make a just-created name durable by syncing its directory.
+    static func syncDirectory(_ dir: URL) {
+        let fd = open(dir.path, O_RDONLY)
+        guard fd >= 0 else { return }
+        if fcntl(fd, F_FULLFSYNC) != 0 { _ = fsync(fd) }
+        close(fd)
+    }
+
+    /// Remove leftover partials under a folder (after a crash or stop).
+    static func removePartials(under root: URL) -> Int {
+        var n = 0
+        guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
+                                                      options: [.skipsPackageDescendants]) else { return 0 }
+        for case let u as URL in en where u.lastPathComponent.hasSuffix(".sc-partial") {
+            if (try? FileManager.default.removeItem(at: u)) != nil { n += 1 }
+        }
+        return n
     }
 
 
@@ -234,32 +320,78 @@ final class CloneEngine: @unchecked Sendable {
 
     /// Re-read every copy from disk and compare to the source hash.
     /// All destinations are verified concurrently, each sequentially through
-    /// its own files (sequential reads are what drives are fastest at).
+    /// its own files. Thorough/Paranoid add: the source re-read on its own
+    /// thread with a second digest, and a byte-by-byte compare per copy.
     func verify(
         copied: [CopiedFile],
         destinationRoots: [URL],
         algorithm: HashAlgorithm,
+        mode: VerificationMode = .standard,
         control: CloneControl? = nil,
         onFileVerified: (@Sendable (URL, String, Bool) -> Void)? = nil,  // (root, relPath, ok)
         onBytes: (@Sendable (Int64) -> Void)? = nil
     ) -> [FileCloneOutcome] {
 
-        // root -> relativePath -> hash
-        let results = ResultBox()
+        let results = ResultBox()          // root -> relPath -> primary hash
+        let md5s = ResultBox()             // root -> relPath -> md5
+        let reread = ResultBox()           // "source" -> relPath -> primary (and md5 under "source-md5")
+        let bytesOK = ResultBox()          // root -> relPath -> "ok"/"diff@offset"
         let group = DispatchGroup()
+        let sourceKey = URL(fileURLWithPath: "/__source__")
+        let sourceMD5Key = URL(fileURLWithPath: "/__source_md5__")
+
+        guard mode.hashes else {
+            // Quick: nothing to verify; report copies as unverified.
+            return copied.map { c in
+                var hashes: [URL: String] = [:], ok: [URL: Bool] = [:]
+                for root in destinationRoots { hashes[root] = ""; ok[root] = false }
+                var o = FileCloneOutcome(relativePath: c.source.relativePath, size: c.source.size,
+                                         modificationDate: c.source.modificationDate, sourceHash: "",
+                                         destinationHashes: hashes, verified: ok,
+                                         copyStartedAt: c.seconds > 0 ? c.startedAt : nil, copySeconds: c.seconds)
+                o.mode = mode
+                return o
+            }
+        }
 
         for root in destinationRoots {
             group.enter()
             Thread.detachNewThread {
                 defer { group.leave() }
                 for c in copied {
-                    if let ctl = control, !ctl.checkpoint() { break }   // pause / stop
+                    if let ctl = control, !ctl.checkpoint() { break }
                     guard let destURL = c.destinationFiles[root] else { continue }
-                    let hash = (try? ChecksumService.hash(fileAt: destURL, algorithm: algorithm)) ?? "READ-ERROR"
-                    let ok = (hash == c.sourceHash)
+                    let r = try? ChecksumService.hashDual(fileAt: destURL, algorithm: algorithm,
+                                                          withMD5: mode.secondHash,
+                                                          onBytes: { onBytes?(Int64($0)) })
+                    let hash = r?.primary ?? "READ-ERROR"
                     results.set(root: root, path: c.source.relativePath, hash: hash)
+                    if let m = r?.md5 { md5s.set(root: root, path: c.source.relativePath, hash: m) }
+                    let ok = (hash == c.sourceHash)
+                    if mode.byteCompare && ok {
+                        if let diff = try? ChecksumService.byteCompare(c.source.url, destURL,
+                                                                       onBytes: { onBytes?(Int64($0)) }) {
+                            bytesOK.set(root: root, path: c.source.relativePath, hash: diff.map { "diff@\($0)" } ?? "ok")
+                        } else {
+                            bytesOK.set(root: root, path: c.source.relativePath, hash: "error")
+                        }
+                    }
                     onFileVerified?(root, c.source.relativePath, ok)
-                    onBytes?(c.source.size)
+                }
+            }
+        }
+
+        if mode.rereadsSource {
+            group.enter()
+            Thread.detachNewThread {
+                defer { group.leave() }
+                for c in copied {
+                    if let ctl = control, !ctl.checkpoint() { break }
+                    let r = try? ChecksumService.hashDual(fileAt: c.source.url, algorithm: algorithm,
+                                                          withMD5: mode.secondHash,
+                                                          onBytes: { onBytes?(Int64($0)) })
+                    reread.set(root: sourceKey, path: c.source.relativePath, hash: r?.primary ?? "READ-ERROR")
+                    if let m = r?.md5 { reread.set(root: sourceMD5Key, path: c.source.relativePath, hash: m) }
                 }
             }
         }
@@ -268,19 +400,36 @@ final class CloneEngine: @unchecked Sendable {
         return copied.map { c in
             var hashes: [URL: String] = [:]
             var ok: [URL: Bool] = [:]
+            var dm: [URL: String] = [:]
+            var bc: [URL: Bool] = [:]
             for root in destinationRoots {
                 let h = results.get(root: root, path: c.source.relativePath) ?? "MISSING"
                 hashes[root] = h
                 ok[root] = (h == c.sourceHash)
+                if let m = md5s.get(root: root, path: c.source.relativePath) {
+                    dm[root] = m
+                    if let sm = c.sourceHashMD5, sm != m { ok[root] = false }
+                }
+                if mode.byteCompare {
+                    bc[root] = (bytesOK.get(root: root, path: c.source.relativePath) == "ok")
+                }
             }
-            return FileCloneOutcome(relativePath: c.source.relativePath,
-                                    size: c.source.size,
-                                    modificationDate: c.source.modificationDate,
-                                    sourceHash: c.sourceHash,
-                                    destinationHashes: hashes,
-                                    verified: ok,
-                                    copyStartedAt: c.seconds > 0 ? c.startedAt : nil,
-                                    copySeconds: c.seconds)
+            var o = FileCloneOutcome(relativePath: c.source.relativePath, size: c.source.size,
+                                     modificationDate: c.source.modificationDate, sourceHash: c.sourceHash,
+                                     destinationHashes: hashes, verified: ok,
+                                     copyStartedAt: c.seconds > 0 ? c.startedAt : nil, copySeconds: c.seconds)
+            o.mode = mode
+            o.sourceHashMD5 = c.sourceHashMD5
+            o.destinationMD5 = dm
+            o.byteCompareOK = bc
+            if mode.rereadsSource {
+                let rh = reread.get(root: sourceKey, path: c.source.relativePath)
+                o.sourceRereadHash = rh
+                var good = (rh == c.sourceHash)
+                if let sm = c.sourceHashMD5, let rm = reread.get(root: sourceMD5Key, path: c.source.relativePath), sm != rm { good = false }
+                o.sourceRereadOK = good
+            }
+            return o
         }
     }
 }

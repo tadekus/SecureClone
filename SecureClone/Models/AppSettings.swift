@@ -20,6 +20,9 @@ final class AppSettings: ObservableObject {
     @Published var showInMenuBar: Bool      { didSet { save() } }
     @Published var preventSleep: Bool       { didSet { save() } }
     @Published var algorithm: HashAlgorithm { didSet { save() } }
+    @Published var verificationMode: VerificationMode { didSet { save() } }
+    @Published var copyAppleDouble: Bool    { didSet { save() } }
+    @Published var allowSamePhysicalDisk: Bool { didSet { save() } }
     /// Last-used destination volume paths, so a new card can auto-start.
     @Published var rememberedDestinations: [String] { didSet { save() } }
 
@@ -37,6 +40,9 @@ final class AppSettings: ObservableObject {
         showInMenuBar = d.object(forKey: "showInMenuBar") as? Bool ?? true
         preventSleep = d.object(forKey: "preventSleep") as? Bool ?? true
         algorithm = HashAlgorithm(rawValue: d.string(forKey: "algorithm") ?? "") ?? .xxh64
+        verificationMode = VerificationMode(rawValue: d.string(forKey: "verificationMode") ?? "") ?? .standard
+        copyAppleDouble = d.bool(forKey: "copyAppleDouble")
+        allowSamePhysicalDisk = d.bool(forKey: "allowSamePhysicalDisk")
         rememberedDestinations = d.stringArray(forKey: "rememberedDestinations") ?? []
         loading = false
     }
@@ -65,6 +71,9 @@ final class AppSettings: ObservableObject {
         d.set(showInMenuBar, forKey: "showInMenuBar")
         d.set(preventSleep, forKey: "preventSleep")
         d.set(algorithm.rawValue, forKey: "algorithm")
+        d.set(verificationMode.rawValue, forKey: "verificationMode")
+        d.set(copyAppleDouble, forKey: "copyAppleDouble")
+        d.set(allowSamePhysicalDisk, forKey: "allowSamePhysicalDisk")
         d.set(rememberedDestinations, forKey: "rememberedDestinations")
     }
 }

@@ -14,6 +14,7 @@ struct VolumeInfo: Identifiable, Hashable {
     let isRemovable: Bool
     let totalCapacity: Int64
     let availableCapacity: Int64
+    var connection: DriveConnection? = nil
 
     var usedCapacity: Int64 { totalCapacity - availableCapacity }
 

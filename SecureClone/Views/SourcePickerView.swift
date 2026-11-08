@@ -70,7 +70,17 @@ struct DriveRow: View {
                     Image(systemName: volume.isRemovable ? "sdcard.fill" : "externaldrive.fill")
                         .foregroundStyle(isSelected ? accent : .secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(volume.name).bold()
+                        HStack(spacing: 6) {
+                            Text(volume.name).bold()
+                            if let c = volume.connection, c.bus != .unknown {
+                                Text(c.label)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(RoundedRectangle(cornerRadius: 4)
+                                        .fill(c.isSlowLink ? Color.orange.opacity(0.25) : Color.gray.opacity(0.15)))
+                                    .foregroundStyle(c.isSlowLink ? .orange : .secondary)
+                            }
+                        }
                         Text(subtitle ?? "\(volume.availableCapacityFormatted) free of \(volume.totalCapacityFormatted)")
                             .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.tail)

@@ -50,15 +50,17 @@ enum MHLWriter {
         """
 
         for o in outcomes {
-            guard let hash = o.destinationHashes[destinationRoot] else { continue }
+            guard let hash = o.destinationHashes[destinationRoot], !hash.isEmpty else { continue }
             let modStr = o.modificationDate.map { iso.string(from: $0) } ?? iso.string(from: finishDate)
+            var extra = ""
+            if let m = o.destinationMD5[destinationRoot], algorithm != .md5 { extra = "    <md5>\(m)</md5>\n" }
             xml += """
               <hash>
                 <file>\(escape(o.relativePath))</file>
                 <size>\(o.size)</size>
                 <lastmodificationdate>\(modStr)</lastmodificationdate>
                 <\(algorithm.mhlElement)>\(hash)</\(algorithm.mhlElement)>
-                <hashdate>\(iso.string(from: finishDate))</hashdate>
+            \(extra)    <hashdate>\(iso.string(from: finishDate))</hashdate>
               </hash>
 
             """

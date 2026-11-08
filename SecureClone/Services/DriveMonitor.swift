@@ -18,6 +18,7 @@ final class DriveMonitor: ObservableObject {
     let unmounted = PassthroughSubject<URL, Never>()
 
     private var session: DASession?
+    private var connectionCache: [String: DriveConnection] = [:]
     private var mountObserver: NSObjectProtocol?
     private var unmountObserver: NSObjectProtocol?
 
@@ -52,6 +53,9 @@ final class DriveMonitor: ObservableObject {
         }
         unmountObserver = nc.addObserver(forName: NSWorkspace.didUnmountNotification,
                                          object: nil, queue: .main) { [weak self] note in
+            if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
+                self?.connectionCache[url.path] = nil
+            }
             self?.refresh()
             if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
                 self?.unmounted.send(url)
@@ -88,13 +92,20 @@ final class DriveMonitor: ObservableObject {
 
             let removable = (vals.volumeIsRemovable ?? false) || (vals.volumeIsEjectable ?? false)
 
-            return VolumeInfo(
+            var v = VolumeInfo(
                 url: url,
                 name: vals.volumeName ?? url.lastPathComponent,
                 isRemovable: removable,
                 totalCapacity: Int64(vals.volumeTotalCapacity ?? 0),
                 availableCapacity: Int64(vals.volumeAvailableCapacity ?? 0)
             )
+            if let c = connectionCache[url.path] { v.connection = c }
+            else {
+                let c = DriveConnectionInfo.connection(for: url)
+                connectionCache[url.path] = c
+                v.connection = c
+            }
+            return v
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

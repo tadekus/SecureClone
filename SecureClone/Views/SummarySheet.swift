@@ -14,19 +14,21 @@ struct SummarySheet: View {
     @ObservedObject var job: CloneJob
     let onClose: () -> Void
 
-    private var success: Bool { job.state == .completed }
+    private var success: Bool { job.state == .completed && job.mode.hashes }
+    private var quick: Bool { job.mode == .quick && job.kind == .offload }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                Image(systemName: success ? "checkmark.seal.fill" : "xmark.seal.fill")
+                Image(systemName: quick ? "exclamationmark.triangle.fill" : success ? "checkmark.seal.fill" : "xmark.seal.fill")
                     .font(.system(size: 34))
-                    .foregroundStyle(success ? .green : .red)
+                    .foregroundStyle(quick ? .orange : success ? .green : .red)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(success ? "All destinations verified" : "Verification failed")
+                    Text(quick ? "Copied — not verified" : success ? "All destinations verified (\(job.mode.rawValue))" : "Verification failed")
                         .font(.title2).bold()
-                    Text(success ? "Safe to wipe the source card."
-                                 : "Do NOT wipe the source. See mismatches below.")
+                    Text(quick ? "Quick mode makes no checksums. Keep the card until a verified copy exists."
+                         : success ? "Safe to wipe the source card."
+                                   : "Do NOT wipe the source. See the problems below.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()

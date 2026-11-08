@@ -7,12 +7,17 @@
 //
 
 import Foundation
+import Darwin
 
 struct ScannedFile: Sendable {
     let url: URL            // absolute source URL
     let relativePath: String // path relative to source root
     let size: Int64
     let modificationDate: Date?
+    /// Online-only placeholder (iCloud / Dropbox / OneDrive) — no local data.
+    var isDataless: Bool = false
+    /// A "._" AppleDouble sidecar (resource fork / xattrs on non-native file systems).
+    var isAppleDouble: Bool = false
 }
 
 enum SourceScanner {
@@ -25,7 +30,8 @@ enum SourceScanner {
     ]
 
     /// Returns all copyable files under `root`, with paths relative to it.
-    static func scan(root: URL) throws -> [ScannedFile] {
+    /// - includeAppleDouble: keep "._" sidecars (default: skip them).
+    static func scan(root: URL, includeAppleDouble: Bool = false) throws -> [ScannedFile] {
         var results: [ScannedFile] = []
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey,
                                       .fileSizeKey, .contentModificationDateKey,
@@ -43,8 +49,9 @@ enum SourceScanner {
         for case let url as URL in enumerator {
             let name = url.lastPathComponent
 
-            // Skip resource-fork sidecars (._Foo) and known system entries.
-            if name.hasPrefix("._") || skipNames.contains(name) {
+            // Skip known system entries, and "._" sidecars unless asked to keep them.
+            let appleDouble = name.hasPrefix("._")
+            if (appleDouble && !includeAppleDouble) || skipNames.contains(name) || name.hasSuffix(".sc-partial") {
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                     enumerator.skipDescendants()
                 }
@@ -61,12 +68,16 @@ enum SourceScanner {
                 if rel.hasPrefix("/") { rel.removeFirst() }
             }
 
-            results.append(ScannedFile(
+            var f = ScannedFile(
                 url: url,
                 relativePath: rel,
                 size: Int64(vals.fileSize ?? 0),
                 modificationDate: vals.contentModificationDate
-            ))
+            )
+            f.isAppleDouble = appleDouble
+            var st = stat()
+            if lstat(url.path, &st) == 0, (st.st_flags & UInt32(SF_DATALESS)) != 0 { f.isDataless = true }
+            results.append(f)
         }
 
         return results.sorted { $0.relativePath < $1.relativePath }

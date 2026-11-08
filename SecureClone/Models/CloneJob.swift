@@ -49,9 +49,11 @@ struct FileResult: Identifiable {
     var destinationHashes: [URL: String] = [:]
     /// destination mount URL -> verified (hash matches source)
     var verified: [URL: Bool] = [:]
+    /// Full verdict for the mode (includes re-read and byte compare when required).
+    var fullyVerified: Bool? = nil
 
     var allVerified: Bool {
-        !verified.isEmpty && verified.values.allSatisfy { $0 }
+        fullyVerified ?? (!verified.isEmpty && verified.values.allSatisfy { $0 })
     }
 }
 
@@ -85,6 +87,7 @@ final class CloneJob: ObservableObject, Identifiable {
     var skippedBytes: Int64 = 0
     /// Verify-only: the MHL being checked.
     var mhlURL: URL? = nil
+    var mode: VerificationMode = .standard
 
     @Published var state: JobState = .idle
     @Published var overallProgress: Double = 0      // 0…1 across all bytes

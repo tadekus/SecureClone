@@ -94,6 +94,19 @@ final class CloneViewModel: ObservableObject {
             .store(in: &cancellables)
         let remembered = Set(settings.rememberedDestinations)
         selectedDestinations = Set(monitor.volumes.filter { remembered.contains($0.url.path) })
+
+        if let r = ActiveRunStore.takeLeftover() {
+            let when = DateFormatter.localizedString(from: r.updatedAt, dateStyle: .short, timeStyle: .short)
+            log.log("⚠️ The previous run of \"\(r.jobName)\" (\(r.sourceName) → \(r.destinations.joined(separator: ", "))) was interrupted at \(when) while \(r.phase): "
+                    + "\(r.copiedFiles)/\(r.totalFiles) files copied, \(r.verifiedFiles) verified. "
+                    + "Nothing from that run is proven safe — start the card again (it will resume).", level: .error)
+            HistoryStore.append(HistoryEntry(date: r.updatedAt, jobName: r.jobName, reel: r.jobName, camera: nil,
+                                             system: "Interrupted", sourceName: r.sourceName, sourceCapacity: r.sourceCapacity,
+                                             fileCount: r.copiedFiles, totalBytes: 0, destinations: r.destinations,
+                                             destinationFolders: r.destinationFolders, verified: false,
+                                             durationSeconds: r.updatedAt.timeIntervalSince(r.startedAt),
+                                             appVersion: r.appVersion, newestFileDate: nil))
+        }
     }
 
     private func rememberDestinations() {
@@ -282,16 +295,40 @@ final class CloneViewModel: ObservableObject {
                       .joined(separator: ", "))
 
         let root = spec.sourceRoot
+        let includeAD = settings.copyAppleDouble
+        let allowSame = settings.allowSamePhysicalDisk
+        let folders = job.destinationFolders
         Task.detached(priority: .userInitiated) {
-            let files = (try? SourceScanner.scan(root: root)) ?? []
-            await MainActor.run { self.afterScan(spec: spec, files: files) }
+            let files = (try? SourceScanner.scan(root: root, includeAppleDouble: includeAD)) ?? []
+            let problems = SafetyValidator.check(source: spec.source, sourceFolder: spec.sourceFolder,
+                                                 destinations: spec.destinations, destinationFolders: folders,
+                                                 files: files, allowSamePhysicalDisk: allowSame)
+            await MainActor.run { self.afterScan(spec: spec, files: files, problems: problems) }
         }
     }
 
-    private func afterScan(spec: JobSpec, files: [ScannedFile]) {
+    private func afterScan(spec: JobSpec, files: [ScannedFile], problems: [SafetyProblem]) {
         pendingFiles = files
         let total = SourceScanner.totalBytes(files)
-        log.log("Found \(files.count) files, \(VolumeInfo.format(total)).")
+        let ad = files.filter { $0.isAppleDouble }.count
+        log.log("Found \(files.count) files, \(VolumeInfo.format(total))." + (ad > 0 ? " (\(ad) ._ sidecars included)" : ""))
+
+        // Link speed warnings.
+        for v in [spec.source] + spec.destinations {
+            if let c = v.connection, c.isSlowLink {
+                log.log("⚠️ \(v.name) is on a \(c.label) link — expect ≤ \(c.linkCeilingMBps ?? 40) MB/s.", level: .warn)
+            }
+        }
+
+        // Safety.
+        for p in problems where p.severity == .warn { log.log("⚠️ \(p.message)", level: .warn) }
+        let refusals = problems.filter { $0.severity == .refuse }
+        if !refusals.isEmpty {
+            for p in refusals { log.log("⛔ \(p.message)", level: .error) }
+            presentError("This job can't start:\n\n" + refusals.map { "• " + $0.message }.joined(separator: "\n"))
+            abandonPending(); return
+        }
+
         if files.isEmpty {
             log.log("Nothing to copy.", level: .warn)
             abandonPending(); return
@@ -437,11 +474,25 @@ final class CloneViewModel: ObservableObject {
         let algorithm = job.algorithm
         let jobName = spec.jobName
         let settings = self.settings
+        let mode = settings.verificationMode
+        job.mode = mode
+
+        var journal = ActiveRun(jobName: jobName, sourceName: job.source.name, sourceCapacity: job.source.totalCapacity,
+                                destinations: job.destinations.map { $0.name },
+                                destinationFolders: destinationRoots.map { $0.path },
+                                mode: mode.rawValue, startedAt: startDate, phase: "copying",
+                                totalFiles: files.count, copiedFiles: 0, verifiedFiles: 0, currentFile: "",
+                                updatedAt: Date(), appVersion: AppInfo.versionString,
+                                pid: ProcessInfo.processInfo.processIdentifier)
+        ActiveRunStore.write(journal)
+        log.log("Verification mode: \(mode.rawValue) — \(mode.summary)")
 
         do {
             job.totalBytes = SourceScanner.totalBytes(files)
             for root in destinationRoots {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let n = CloneEngine.removePartials(under: root)
+                if n > 0 { log.log("Removed \(n) leftover partial file\(n == 1 ? "" : "s") on \(root.lastPathComponent)", level: .warn) }
             }
 
             // 1. RESUME records
@@ -511,24 +562,36 @@ final class CloneViewModel: ObservableObject {
 
                 var result: CopiedFile? = nil
 
-                // Skip-identical: every destination already has this file, same
-                // size, with an MHL hash that matches the source's hash.
-                if settings.skipIdentical, !known.isEmpty {
+                // Skip-identical: every destination already has this file with the
+                // same size and either an MHL hash or (fallback) a freshly computed
+                // hash of the copy that matches the source's hash.
+                if settings.skipIdentical, mode.hashes {
                     let rel = file.relativePath
                     let size = file.size
                     let sourceURL = file.url
                     let knownSnapshot = known
-                    let allKnown = destinationRoots.allSatisfy { root in
-                        guard let k = knownSnapshot[root]?[rel] else { return false }
+                    let existsEverywhere = destinationRoots.allSatisfy { root in
                         let f = root.appendingPathComponent(rel)
                         let onDisk = (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) }
-                        return onDisk == size && (k.0 == nil || k.0 == size)
+                        return onDisk == size
                     }
-                    if allKnown {
+                    if existsEverywhere {
+                        // Hash the source once; take each copy's hash from its MHL or compute it.
                         let srcHash = try await Task.detached(priority: .userInitiated) {
                             try ChecksumService.hash(fileAt: sourceURL, algorithm: algorithm)
                         }.value
-                        if destinationRoots.allSatisfy({ knownSnapshot[$0]?[rel]?.1 == srcHash }) {
+                        var destHashes: [URL: String] = [:]
+                        for root in destinationRoots {
+                            if let k = knownSnapshot[root]?[rel], k.0 == nil || k.0 == size {
+                                destHashes[root] = k.1
+                            } else {
+                                let f = root.appendingPathComponent(rel)
+                                destHashes[root] = (try? await Task.detached(priority: .userInitiated) {
+                                    try ChecksumService.hash(fileAt: f, algorithm: algorithm)
+                                }.value) ?? ""
+                            }
+                        }
+                        if destinationRoots.allSatisfy({ destHashes[$0] == srcHash }) {
                             var destFiles: [URL: URL] = [:]
                             for root in destinationRoots { destFiles[root] = root.appendingPathComponent(rel) }
                             result = CopiedFile(source: file, sourceHash: srcHash, destinationFiles: destFiles)
@@ -543,7 +606,7 @@ final class CloneViewModel: ObservableObject {
                 if result == nil {
                     let r = try await Task.detached(priority: .userInitiated) {
                         try engine.copyFile(source: file, destinationRoots: destinationRoots,
-                                            algorithm: algorithm, control: control,
+                                            algorithm: algorithm, mode: mode, control: control,
                                             onChunk: { progress.add($0) })
                     }.value
                     result = r
@@ -559,6 +622,8 @@ final class CloneViewModel: ObservableObject {
                                                             sourceHash: done.sourceHash))
                 sessionState.updatedAt = Date()
                 SessionStore.save(sessionState, destinationRoots: destinationRoots)
+                journal.copiedFiles += 1; journal.currentFile = file.relativePath; journal.updatedAt = Date()
+                ActiveRunStore.write(journal)
             }
 
             poller.cancel()
@@ -573,7 +638,10 @@ final class CloneViewModel: ObservableObject {
             // 4. VERIFY
             job.state = .verifying
             job.currentFile = ""
-            job.verifyTotalBytes = job.totalBytes * Int64(max(1, job.destinations.count))
+            var passes = Int64(max(1, job.destinations.count))
+            if mode.rereadsSource { passes += 1 }
+            if mode.byteCompare { passes += Int64(2 * max(1, job.destinations.count)) }
+            job.verifyTotalBytes = job.totalBytes * passes
             job.verifyBytesDone = 0
             let verifyProgress = ProgressThrottle()
             job.verifyStartedAt = Date()
@@ -584,12 +652,16 @@ final class CloneViewModel: ObservableObject {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                 }
             }
+            journal.phase = "verifying"; journal.updatedAt = Date(); ActiveRunStore.write(journal)
+            let verifiedCounter = ProgressThrottle()
             let copiedSnapshot = copied
             let outcomes = await Task.detached(priority: .userInitiated) {
                 engine.verify(copied: copiedSnapshot, destinationRoots: destinationRoots,
-                              algorithm: algorithm, control: control,
+                              algorithm: algorithm, mode: mode, control: control,
+                              onFileVerified: { _, _, ok in if ok { verifiedCounter.add(1) } },
                               onBytes: { verifyProgress.add(Int($0)) })
             }.value
+            journal.verifiedFiles = Int(verifiedCounter.snapshot()); journal.phase = "reporting"; ActiveRunStore.write(journal)
             verifyPoller.cancel()
             job.finishVerifyProgress()
             if control.isCancelled { throw CloneEngineError.cancelled }
@@ -599,13 +671,20 @@ final class CloneViewModel: ObservableObject {
                 fr.sourceHash = outcome.sourceHash
                 fr.destinationHashes = outcome.destinationHashes
                 fr.verified = outcome.verified
+                fr.fullyVerified = outcome.allVerified
                 job.fileResults.append(fr)
                 for (dp, root) in zip(job.destinationProgress, destinationRoots) {
                     if let ok = outcome.verified[root] {
                         if ok { dp.verifiedCount += 1 } else { dp.failed = true }
                     }
                 }
-                if !outcome.allVerified { log.log("✗ MISMATCH \(outcome.relativePath)", level: .error) }
+                if !outcome.allVerified && mode.hashes {
+                    var why: [String] = []
+                    if outcome.verified.values.contains(false) { why.append("hash mismatch") }
+                    if outcome.sourceRereadOK == false { why.append("card re-read differs — unreliable card read") }
+                    if outcome.byteCompareOK.values.contains(false) { why.append("byte compare differs") }
+                    log.log("✗ FAILED \(outcome.relativePath): \(why.joined(separator: "; "))", level: .error)
+                }
             }
 
             // 5. METADATA
@@ -620,12 +699,14 @@ final class CloneViewModel: ObservableObject {
                                               outcomes: outcomes, algorithm: algorithm,
                                               startDate: startDate, finishDate: finishDate,
                                               destinationFolders: destinationRoots, skipped: job.skippedFileCount,
-                                              sourceFolder: spec.sourceFolder)
+                                              sourceFolder: spec.sourceFolder, mode: mode)
             let csv = CSVReportWriter.make(outcomes: outcomes, metadata: clips, algorithm: algorithm)
             var locations: [URL] = []
             for root in destinationRoots {
-                try MHLWriter.write(destinationRoot: root, outcomes: outcomes, algorithm: algorithm,
-                                    startDate: startDate, finishDate: finishDate, jobName: jobName)
+                if mode.hashes {
+                    try MHLWriter.write(destinationRoot: root, outcomes: outcomes, algorithm: algorithm,
+                                        startDate: startDate, finishDate: finishDate, jobName: jobName)
+                }
                 let u = try LogWriter.write(report: report, to: root, jobName: jobName, finishDate: finishDate)
                 try CSVReportWriter.write(csv: csv, to: root, jobName: jobName, finishDate: finishDate)
                 locations.append(u.deletingLastPathComponent())
@@ -641,13 +722,17 @@ final class CloneViewModel: ObservableObject {
                 }
             }
 
-            let ok = job.allDestinationsVerified
-            job.state = ok ? .completed : .failed("Verification mismatch")
+            let ok = mode.hashes && job.allDestinationsVerified
+            job.state = ok ? .completed : (mode.hashes ? .failed("Verification mismatch") : .completed)
             job.finalReport = report
             job.reportLocations = locations
             if ok { SessionStore.delete(jobName: jobName, destinationRoots: destinationRoots) }
-            log.log(ok ? "✅ \(jobName): ALL DESTINATIONS VERIFIED — SAFE TO WIPE SOURCE"
-                       : "❌ \(jobName): VERIFICATION FAILED — DO NOT WIPE SOURCE", level: ok ? .ok : .error)
+            if !mode.hashes {
+                log.log("⚠️ \(jobName): copied in Quick mode — NOT VERIFIED, do not wipe the source on this alone", level: .warn)
+            } else {
+                log.log(ok ? "✅ \(jobName): ALL DESTINATIONS VERIFIED (\(mode.rawValue)) — SAFE TO WIPE SOURCE"
+                           : "❌ \(jobName): VERIFICATION FAILED — DO NOT WIPE SOURCE", level: ok ? .ok : .error)
+            }
 
             // 7. HISTORY + DAY SUMMARY
             HistoryStore.append(HistoryEntry(
@@ -669,6 +754,7 @@ final class CloneViewModel: ObservableObject {
 
             // 8. AUTO-EJECT (source only; thumbnails read from the destination)
             var ejected = false
+            ActiveRunStore.clear()
             if ok && settings.autoEject {
                 isRunning = false              // so eject() doesn't refuse
                 eject(job.source)
@@ -683,9 +769,11 @@ final class CloneViewModel: ObservableObject {
         } catch CloneEngineError.cancelled {
             job.state = .stopped
             job.currentFile = ""
+            ActiveRunStore.clear()
             log.log("⏹ Stopped. Progress saved — start the same card again to resume.", level: .warn)
         } catch {
             job.state = .failed(error.localizedDescription)
+            ActiveRunStore.clear()
             log.log("ERROR: \(error.localizedDescription)", level: .error)
         }
 
