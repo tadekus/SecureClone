@@ -117,8 +117,18 @@ final class CloneEngine: @unchecked Sendable {
             }
         }
 
-        // Reader: this thread. Read once, hash, fan out.
+        // Hasher: its own thread with its own queue, so hashing never
+        // serializes with reading or writing.
+        let hashQueue = ChunkQueue(capacity: queueDepth)
         let hasher = StreamingHasher(algorithm: algorithm)
+        let hashGroup = DispatchGroup()
+        hashGroup.enter()
+        Thread.detachNewThread {
+            defer { hashGroup.leave() }
+            while let chunk = hashQueue.pop() { hasher.update(chunk) }
+        }
+
+        // Reader: this thread. Read once, fan out to hasher + writers.
         var readError: Error? = nil
         var wasCancelled = false
         do {
@@ -130,7 +140,7 @@ final class CloneEngine: @unchecked Sendable {
 
                 let chunk = try autoreleasepool { try reader.read(upToCount: bufferSize) ?? Data() }
                 if chunk.isEmpty { break }
-                hasher.update(chunk)
+                hashQueue.push(chunk)
                 var anyAlive = false
                 for q in queues.values where q.push(chunk) { anyAlive = true }
                 if !anyAlive { break }      // every writer has failed
@@ -140,8 +150,10 @@ final class CloneEngine: @unchecked Sendable {
             readError = CloneEngineError.readFailed(source.url, error)
         }
 
-        // Signal end-of-file and wait for all writers to flush.
+        // Signal end-of-file and wait for the hasher and all writers to finish.
+        hashQueue.close()
         queues.values.forEach { $0.close() }
+        hashGroup.wait()
         group.wait()
 
         // A cancelled or failed file must never be left half-written: a later

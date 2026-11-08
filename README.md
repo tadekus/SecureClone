@@ -17,7 +17,8 @@ offload tools, in a small open-source app they can build themselves.
 **Copy & verify**
 - Read the source card **once**, fan out to any number of destination drives
   concurrently — a slow drive never holds back a fast one
-- **xxHash64** by default (MD5 / SHA-256 available), hashed inline while reading
+- **xxHash64** by default (MD5 / SHA-256 available), hashed on its own thread
+  while reading — the hasher never slows the drives
 - Every destination is **independently re-read and verified** after the copy;
   writes are flushed to the physical disk before verification, so the OS cache
   can never mask a bad write
@@ -86,7 +87,7 @@ Requires macOS 14 Sonoma or later. Universal binary (Apple Silicon + Intel).
 
 ## Build it yourself
 
-No Xcode project needed — it's a Swift package.
+No Xcode project needed — it's a Swift package with no external dependencies.
 
 ```bash
 ./build-app.sh              # → build/SecureClone.app

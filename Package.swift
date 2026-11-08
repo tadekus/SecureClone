@@ -10,15 +10,9 @@ import PackageDescription
 let package = Package(
     name: "SecureClone",
     platforms: [.macOS(.v14)],
-    dependencies: [
-        .package(url: "https://github.com/daisuke-t-jp/xxHash-Swift", from: "1.1.1")
-    ],
     targets: [
         .executableTarget(
             name: "SecureClone",
-            dependencies: [
-                .product(name: "xxHash-Swift", package: "xxHash-Swift")
-            ],
             path: "SecureClone",
             exclude: ["SecureClone.entitlements"]
         )

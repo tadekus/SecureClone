@@ -3,6 +3,22 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.2 — 2026-11-08
+### Fixed
+- **Hang at launch** (main thread unresponsive, force-quit by macOS). Volume
+  rows had a new identity on every refresh, start-up work published state from
+  inside the first view update, and the naming form used a `Grid` with
+  middle-truncated text inside the split view — all replaced with stable IDs,
+  deferred start-up, plain stacks and tail truncation.
+- **Throughput ~100 MB/s on fast SSDs.** Hashing was the bottleneck: the pure-
+  Swift xxHash package plus a per-chunk array copy, running in series with the
+  reader. Replaced with a built-in pointer-based xxHash64 (validated against
+  the reference vectors) running on its own pipeline thread. Verification uses
+  8 MB reads with the cache bypassed, so it measures the disk, not RAM.
+- Speed-test progress updates are coalesced (~10/s) instead of one per chunk.
+### Changed
+- No external package dependencies any more.
+
 ## 2.1 — 2026-11-08
 ### Added
 - **Speed test mode.** Pick any volumes: each gets a write test (temp file,

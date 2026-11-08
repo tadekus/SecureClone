@@ -40,6 +40,25 @@ final class SpeedTestViewModel: ObservableObject {
     private var control = CloneControl()
     let log: LogStore
 
+    /// Progress reporter that posts to the main actor at most ~10×/s.
+    private final class Reporter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last = Date.distantPast
+        private var lastValue = -1.0
+        let vm: SpeedTestViewModel
+        init(_ vm: SpeedTestViewModel) { self.vm = vm }
+        func report(_ p: Double) {
+            lock.lock()
+            let now = Date()
+            let due = now.timeIntervalSince(last) >= 0.1 || p >= 1 || p - lastValue >= 0.05
+            if due { last = now; lastValue = p }
+            lock.unlock()
+            guard due else { return }
+            let vm = self.vm
+            Task { @MainActor in vm.stepProgress = p }
+        }
+    }
+
     init(log: LogStore) { self.log = log }
 
     var canRun: Bool { !selected.isEmpty && !isRunning }
@@ -63,6 +82,7 @@ final class SpeedTestViewModel: ObservableObject {
         let doTransfer = realTransfer
         control = CloneControl()
         let control = self.control
+        let reporter = Reporter(self)
         isRunning = true
         finishedAt = nil
         results = volumes.map { SpeedResult(volume: $0, readOnly: SpeedTestService.isReadOnly($0)) }
@@ -83,7 +103,7 @@ final class SpeedTestViewModel: ObservableObject {
                         currentStep = "Writing \(size.label) to \(v.name)…"
                         let r = await Task.detached(priority: .userInitiated) { () -> Result<Double, Error> in
                             do { return .success(try SpeedTestService.testWrite(v, bytes: bytes, control: control,
-                                                                                 progress: { p in Task { @MainActor in self.stepProgress = p } })) }
+                                                                                 progress: { p in reporter.report(p) })) }
                             catch { return .failure(error) }
                         }.value
                         switch r {
@@ -103,11 +123,11 @@ final class SpeedTestViewModel: ObservableObject {
                     do {
                         if readOnly || (free < bytes + 64 * 1024 * 1024) {
                             let (s, n) = try SpeedTestService.testReadExisting(v, bytes: bytes, control: control,
-                                                                               progress: { p in Task { @MainActor in self.stepProgress = p } })
+                                                                               progress: { p in reporter.report(p) })
                             return .success((s, n < bytes ? "read \(VolumeInfo.format(n)) of existing files" : "read existing files"))
                         } else {
                             return .success((try SpeedTestService.testReadWritable(v, bytes: bytes, control: control,
-                                                                                    progress: { p in Task { @MainActor in self.stepProgress = p } }), nil))
+                                                                                    progress: { p in reporter.report(p) }), nil))
                         }
                     } catch { return .failure(error) }
                 }.value
@@ -131,7 +151,7 @@ final class SpeedTestViewModel: ObservableObject {
                     var t = TransferResult(from: src, to: v)
                     let r = await Task.detached(priority: .userInitiated) { () -> Result<Double, Error> in
                         do { return .success(try SpeedTestService.testTransfer(from: src, to: v, bytes: bytes, control: control,
-                                                                                progress: { p in Task { @MainActor in self.stepProgress = p } })) }
+                                                                                progress: { p in reporter.report(p) })) }
                         catch { return .failure(error) }
                     }.value
                     switch r {

@@ -67,7 +67,7 @@ struct ClipCell: View {
 
             Text(clip.name)
                 .font(.system(.caption, design: .monospaced)).bold()
-                .lineLimit(1).truncationMode(.middle)
+                .lineLimit(1).truncationMode(.tail)
 
             Text(line1).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             Text(line2).font(.caption2).foregroundStyle(.secondary).lineLimit(1)

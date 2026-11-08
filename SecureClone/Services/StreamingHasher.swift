@@ -10,28 +10,19 @@
 import Foundation
 import CryptoKit
 
-#if canImport(xxHash_Swift)
-import xxHash_Swift
-#endif
-
 final class StreamingHasher {
     private let algorithm: HashAlgorithm
 
     private var md5: Insecure.MD5?
     private var sha: SHA256?
-    #if canImport(xxHash_Swift)
     private var xxh: XXH64?
-    #endif
 
     init(algorithm: HashAlgorithm) {
         self.algorithm = algorithm
         switch algorithm {
         case .md5:    md5 = Insecure.MD5()
         case .sha256: sha = SHA256()
-        case .xxh64:
-            #if canImport(xxHash_Swift)
-            xxh = XXH64()
-            #endif
+        case .xxh64:  xxh = XXH64()
         }
     }
 
@@ -39,12 +30,7 @@ final class StreamingHasher {
         switch algorithm {
         case .md5:    md5?.update(data: data)
         case .sha256: sha?.update(data: data)
-        case .xxh64:
-            #if canImport(xxHash_Swift)
-            data.withUnsafeBytes { raw in
-                xxh?.update(Array(raw.bindMemory(to: UInt8.self)))
-            }
-            #endif
+        case .xxh64:  xxh?.update(data)
         }
     }
 
@@ -55,11 +41,7 @@ final class StreamingHasher {
         case .sha256:
             return (sha?.finalize().map { String(format: "%02x", $0) }.joined()) ?? ""
         case .xxh64:
-            #if canImport(xxHash_Swift)
-            return String(format: "%016x", xxh?.digest() ?? 0)
-            #else
-            return ""
-            #endif
+            return xxh?.hexDigest() ?? ""
         }
     }
 }

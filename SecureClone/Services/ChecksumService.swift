@@ -5,18 +5,12 @@
 //  Streaming hash computation. Files are read in chunks so a 200 GB R3D
 //  is never loaded into RAM. xxHash64 is the film-industry default.
 //
-//  DEPENDENCY: add xxHash-Swift via Swift Package Manager:
-//    https://github.com/daisuke-t-jp/xxHash-Swift
-//  Then `import xxHash_Swift`. If you haven't added it yet, the xxh64
-//  path is guarded behind #if canImport so the project still builds.
+//  xxHash64 is implemented in XXH64.swift (no external dependency).
 //
 
 import Foundation
 import CryptoKit
-
-#if canImport(xxHash_Swift)
-import xxHash_Swift
-#endif
+import Darwin
 
 enum HashAlgorithm: String, CaseIterable, Identifiable, Sendable {
     case xxh64  = "xxHash64"
@@ -35,13 +29,9 @@ enum HashAlgorithm: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum ChecksumError: Error {
-    case xxHashUnavailable
-}
-
 struct ChecksumService {
 
-    static let defaultBufferSize = 4 * 1024 * 1024  // 4 MB
+    static let defaultBufferSize = 8 * 1024 * 1024  // 8 MB
 
     /// Hash a file from disk with the given algorithm.
     static func hash(fileAt url: URL,
@@ -64,6 +54,7 @@ struct ChecksumService {
         var hasher = hasher
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
+        _ = fcntl(handle.fileDescriptor, F_NOCACHE, 1)   // read the disk, not the cache
 
         let total = (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         var processed = 0
@@ -85,10 +76,10 @@ struct ChecksumService {
     static func xxh64(fileAt url: URL,
                       bufferSize: Int = defaultBufferSize,
                       progress: ((Double) -> Void)? = nil) throws -> String {
-        #if canImport(xxHash_Swift)
-        let hasher = XXH64()
+        var hasher = XXH64()
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
+        _ = fcntl(handle.fileDescriptor, F_NOCACHE, 1)   // read the disk, not the cache
 
         let total = (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         var processed = 0
@@ -96,17 +87,12 @@ struct ChecksumService {
         while autoreleasepool(invoking: {
             let data = (try? handle.read(upToCount: bufferSize)) ?? nil
             guard let data, !data.isEmpty else { return false }
-            data.withUnsafeBytes { raw in
-                hasher.update(Array(raw.bindMemory(to: UInt8.self)))
-            }
+            hasher.update(data)
             processed += data.count
             if total > 0 { progress?(Double(processed) / Double(total)) }
             return true
         }) {}
 
-        return String(format: "%016x", hasher.digest())
-        #else
-        throw ChecksumError.xxHashUnavailable
-        #endif
+        return hasher.hexDigest()
     }
 }

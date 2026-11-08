@@ -8,7 +8,7 @@
 import Foundation
 
 struct VolumeInfo: Identifiable, Hashable {
-    let id = UUID()
+    var id: String { url.path }        // stable across refreshes
     let url: URL
     let name: String
     let isRemovable: Bool
@@ -27,8 +27,8 @@ struct VolumeInfo: Identifiable, Hashable {
         return f.string(fromByteCount: bytes)
     }
 
-    // Equatable / Hashable keyed on the mount path, not the random UUID,
-    // so the same volume compares equal across refreshes.
+    // Equatable / Hashable keyed on the mount path, so the same volume
+    // compares equal across refreshes even if its free space changed.
     static func == (lhs: VolumeInfo, rhs: VolumeInfo) -> Bool {
         lhs.url == rhs.url
     }

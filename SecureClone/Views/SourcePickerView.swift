@@ -73,7 +73,7 @@ struct DriveRow: View {
                         Text(volume.name).bold()
                         Text(subtitle ?? "\(volume.availableCapacityFormatted) free of \(volume.totalCapacityFormatted)")
                             .font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
+                            .lineLimit(1).truncationMode(.tail)
                     }
                     Spacer()
                     if isSelected {

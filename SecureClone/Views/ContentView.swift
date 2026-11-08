@@ -106,36 +106,33 @@ struct ContentView: View {
     private var namingSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Naming", systemImage: "folder.badge.gearshape").font(.headline)
-            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
-                GridRow {
-                    Text("Project").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Project").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
                     TextField("e.g. MYFILM", text: $settings.project).textFieldStyle(.roundedBorder)
                     Text("Day").foregroundStyle(.secondary)
                     TextField("DAY_03", text: $settings.day).textFieldStyle(.roundedBorder).frame(width: 90)
                 }
-                GridRow {
-                    Text("Camera").foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text("Camera").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
                     TextField("A", text: $vm.camera).textFieldStyle(.roundedBorder).frame(width: 60)
                     Text("Reel").foregroundStyle(.secondary)
                     TextField("A_0071", text: $vm.reel).textFieldStyle(.roundedBorder)
                 }
-                GridRow {
-                    Text("Job name").foregroundStyle(.secondary)
-                    TextField("Offload", text: $vm.jobName)
-                        .textFieldStyle(.roundedBorder)
-                        .gridCellColumns(3)
+                HStack(spacing: 8) {
+                    Text("Job name").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                    TextField("Offload", text: $vm.jobName).textFieldStyle(.roundedBorder)
                 }
-                GridRow {
-                    Text("Template").foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text("Template").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
                     TextField("{project}/{day}/{camera}/{reel}", text: $settings.template)
                         .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
-                        .gridCellColumns(3)
                 }
             }
             HStack(spacing: 4) {
                 Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
                 Text(vm.namingPreview).font(.system(.caption, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.tail)
             }
             Text("Tokens: " + NamingFields.tokens.joined(separator: " "))
                 .font(.caption2).foregroundStyle(.tertiary)
@@ -281,7 +278,7 @@ struct MHLRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(url.lastPathComponent).font(.system(.caption, design: .monospaced))
                     Text(url.deletingLastPathComponent().path.replacingOccurrences(of: "/Volumes/", with: ""))
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 }
                 Spacer()
             }
@@ -304,7 +301,7 @@ struct QueueView: View {
                     Image(systemName: spec.autoAdded ? "bolt.fill" : "clock").foregroundStyle(.secondary)
                     Text(spec.jobName).bold()
                     Text("\(spec.source.name) → \(spec.destinations.map { $0.name }.joined(separator: ", "))")
-                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     Spacer()
                     Button { vm.removeFromQueue(spec) } label: { Image(systemName: "xmark.circle") }
                         .buttonStyle(.borderless)

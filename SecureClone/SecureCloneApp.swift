@@ -38,10 +38,14 @@ struct SecureCloneApp: App {
                 .environmentObject(monitor)
                 .frame(minWidth: 960, minHeight: 640)
                 .onAppear {
-                    monitor.start()
-                    vm.attach(monitor: monitor)
                     AppDelegate.isBusy = { [weak vm, weak speed] in (vm?.isRunning ?? false) || (speed?.isRunning ?? false) }
                     AppDelegate.keepRunning = { [weak settings] in settings?.showInMenuBar ?? true }
+                    // Start monitoring after the first layout pass, never from
+                    // inside a view update (publishing there can thrash SwiftUI).
+                    DispatchQueue.main.async {
+                        monitor.start()
+                        vm.attach(monitor: monitor)
+                    }
                 }
         }
         .windowResizability(.contentMinSize)
