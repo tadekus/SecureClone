@@ -56,7 +56,14 @@ struct SecureCloneApp: App {
             CommandGroup(replacing: .newItem) { }
         }
 
-        MenuBarExtra(isInserted: $settings.showInMenuBar) {
+        // MenuBarExtra writes its `isInserted` binding back on every update.
+        // Bound straight to a @Published property that publishes on every set,
+        // that re-evaluates the App body → writes again → infinite loop (the
+        // 2.0–2.3 launch hang). This binding only writes on a real change.
+        MenuBarExtra(isInserted: Binding(
+            get: { settings.showInMenuBar },
+            set: { new in if settings.showInMenuBar != new { settings.showInMenuBar = new } }
+        )) {
             MenuBarMenu()
                 .environmentObject(vm)
                 .environmentObject(settings)

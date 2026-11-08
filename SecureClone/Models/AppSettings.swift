@@ -43,6 +43,18 @@ final class AppSettings: ObservableObject {
 
     private func save() {
         guard !loading else { return }
+        // Coalesce: many setters can fire in one runloop turn.
+        pendingSave = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pendingSave else { return }
+            self.pendingSave = false
+            self.flush()
+        }
+    }
+
+    private var pendingSave = false
+
+    private func flush() {
         d.set(project, forKey: "project")
         d.set(day, forKey: "day")
         d.set(template, forKey: "template")

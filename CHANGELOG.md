@@ -3,6 +3,14 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.4 — 2026-11-08
+### Fixed
+- **Launch hang — root cause found** (from a symbolized process sample):
+  `MenuBarExtra(isInserted:)` writes its binding back on every update; bound
+  directly to a `@Published` setting it re-published on each write and the
+  App body looped forever. The binding now writes only on a real change, and
+  settings saves are coalesced per run-loop turn.
+
 ## 2.3 — 2026-11-08
 ### Fixed
 - **Launch hang, second pass.** The split view sized its panes from their
