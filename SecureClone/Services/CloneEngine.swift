@@ -369,10 +369,15 @@ final class CloneEngine: @unchecked Sendable {
                     if let m = r?.md5 { md5s.set(root: root, path: c.source.relativePath, hash: m) }
                     let ok = (hash == c.sourceHash)
                     if mode.byteCompare && ok {
-                        if let diff = try? ChecksumService.byteCompare(c.source.url, destURL,
-                                                                       onBytes: { onBytes?(Int64($0)) }) {
-                            bytesOK.set(root: root, path: c.source.relativePath, hash: diff.map { "diff@\($0)" } ?? "ok")
-                        } else {
+                        do {
+                            let diff: Int64? = try ChecksumService.byteCompare(c.source.url, destURL,
+                                                                               onBytes: { onBytes?(Int64($0)) })
+                            if let d = diff {
+                                bytesOK.set(root: root, path: c.source.relativePath, hash: "diff@\(d)")
+                            } else {
+                                bytesOK.set(root: root, path: c.source.relativePath, hash: "ok")
+                            }
+                        } catch {
                             bytesOK.set(root: root, path: c.source.relativePath, hash: "error")
                         }
                     }
