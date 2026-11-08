@@ -229,10 +229,6 @@ final class CloneEngine: @unchecked Sendable {
                           startedAt: startedAt, seconds: Date().timeIntervalSince(startedAt))
     }
 
-    private func posixError() -> Error {
-        NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(errno))])
-    }
 
     // MARK: - Phase 2: parallel verification
 
@@ -287,6 +283,13 @@ final class CloneEngine: @unchecked Sendable {
                                     copySeconds: c.seconds)
         }
     }
+}
+
+/// The current errno as an Error (free function: usable from detached threads).
+private func posixError() -> Error {
+    let code = errno
+    return NSError(domain: NSPOSIXErrorDomain, code: Int(code),
+                   userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(code))])
 }
 
 // MARK: - Tiny thread-safe boxes
