@@ -3,6 +3,15 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.3 — 2026-11-08
+### Fixed
+- **Launch hang, second pass.** The split view sized its panes from their
+  content, which fed back into the window size (the window grew off-screen,
+  memory climbed, the main thread never returned). Replaced with a fixed-width
+  left pane in a plain HStack and an explicit default window size. Drive
+  monitoring now starts in the app's init, before any view exists, so the
+  volume list no longer depends on the first layout pass completing.
+
 ## 2.2 — 2026-11-08
 ### Fixed
 - **Hang at launch** (main thread unresponsive, force-quit by macOS). Volume

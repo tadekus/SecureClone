@@ -17,15 +17,23 @@ struct SecureCloneApp: App {
     @StateObject private var log: LogStore
     @StateObject private var vm: CloneViewModel
     @StateObject private var speed: SpeedTestViewModel
-    @StateObject private var monitor = DriveMonitor()
+    @StateObject private var monitor: DriveMonitor
 
     init() {
         let settings = AppSettings()
         let log = LogStore()
+        let monitor = DriveMonitor()
+        let vm = CloneViewModel(settings: settings, log: log)
         _settings = StateObject(wrappedValue: settings)
         _log = StateObject(wrappedValue: log)
-        _vm = StateObject(wrappedValue: CloneViewModel(settings: settings, log: log))
+        _vm = StateObject(wrappedValue: vm)
         _speed = StateObject(wrappedValue: SpeedTestViewModel(log: log))
+        _monitor = StateObject(wrappedValue: monitor)
+        // Start drive monitoring before any view exists: no publishing from
+        // inside a view update, and the volume list never depends on the UI.
+        monitor.start()
+        vm.attach(monitor: monitor)
+        log.log("\(AppInfo.fullName) started — \(monitor.volumes.count) volume\(monitor.volumes.count == 1 ? "" : "s") mounted")
     }
 
     var body: some Scene {
@@ -36,18 +44,13 @@ struct SecureCloneApp: App {
                 .environmentObject(vm)
                 .environmentObject(speed)
                 .environmentObject(monitor)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 1000, minHeight: 640)
                 .onAppear {
                     AppDelegate.isBusy = { [weak vm, weak speed] in (vm?.isRunning ?? false) || (speed?.isRunning ?? false) }
                     AppDelegate.keepRunning = { [weak settings] in settings?.showInMenuBar ?? true }
-                    // Start monitoring after the first layout pass, never from
-                    // inside a view update (publishing there can thrash SwiftUI).
-                    DispatchQueue.main.async {
-                        monitor.start()
-                        vm.attach(monitor: monitor)
-                    }
                 }
         }
+        .defaultSize(width: 1180, height: 760)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) { }

@@ -12,7 +12,10 @@ struct ContentView: View {
     @EnvironmentObject var speed: SpeedTestViewModel
 
     var body: some View {
-        HSplitView {
+        // A plain HStack with a fixed-width left pane. (An HSplitView whose
+        // panes size themselves from their content can feed back into the
+        // window size and loop on macOS 14 — the launch hang in 2.0–2.2.)
+        HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header.padding([.horizontal, .top])
                 Picker("", selection: $vm.mode) {
@@ -40,10 +43,12 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .frame(minWidth: 400, idealWidth: 440)
+            .frame(width: 440)
+
+            Divider()
 
             JobProgressView()
-                .frame(minWidth: 500)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $vm.showSummary) {
             if let job = vm.job { SummarySheet(job: job) { vm.showSummary = false } }
