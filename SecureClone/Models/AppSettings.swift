@@ -22,6 +22,11 @@ final class AppSettings: ObservableObject {
     @Published var algorithm: HashAlgorithm { didSet { save() } }
     @Published var verificationMode: VerificationMode { didSet { save() } }
     @Published var copyAppleDouble: Bool    { didSet { save() } }
+    /// Verify each file as soon as it is written, while the next one copies.
+    @Published var pipelinedVerify: Bool    { didSet { save() } }
+    /// Create `.metadata_never_index` on destination volumes so Spotlight
+    /// doesn't index freshly written media while we read it back.
+    @Published var preventSpotlight: Bool   { didSet { save() } }
     @Published var allowSamePhysicalDisk: Bool { didSet { save() } }
     @Published var writePDF: Bool           { didSet { save() } }
     @Published var writeJSON: Bool          { didSet { save() } }
@@ -52,6 +57,8 @@ final class AppSettings: ObservableObject {
         algorithm = HashAlgorithm(rawValue: d.string(forKey: "algorithm") ?? "") ?? .xxh64
         verificationMode = VerificationMode(rawValue: d.string(forKey: "verificationMode") ?? "") ?? .standard
         copyAppleDouble = d.bool(forKey: "copyAppleDouble")
+        pipelinedVerify = d.object(forKey: "pipelinedVerify") as? Bool ?? true
+        preventSpotlight = d.object(forKey: "preventSpotlight") as? Bool ?? true
         allowSamePhysicalDisk = d.bool(forKey: "allowSamePhysicalDisk")
         writePDF = d.object(forKey: "writePDF") as? Bool ?? true
         writeJSON = d.object(forKey: "writeJSON") as? Bool ?? true
@@ -93,6 +100,7 @@ final class AppSettings: ObservableObject {
         d.set(algorithm.rawValue, forKey: "algorithm")
         d.set(verificationMode.rawValue, forKey: "verificationMode")
         d.set(copyAppleDouble, forKey: "copyAppleDouble")
+        d.set(pipelinedVerify, forKey: "pipelinedVerify"); d.set(preventSpotlight, forKey: "preventSpotlight")
         d.set(allowSamePhysicalDisk, forKey: "allowSamePhysicalDisk")
         d.set(writePDF, forKey: "writePDF"); d.set(writeJSON, forKey: "writeJSON"); d.set(writeASCMHL, forKey: "writeASCMHL")
         d.set(notifications, forKey: "notifications"); d.set(checkUpdates, forKey: "checkUpdates")

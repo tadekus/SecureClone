@@ -175,6 +175,8 @@ struct ContentView: View {
                     Text(settings.verificationMode.summary).font(.caption2).foregroundStyle(.secondary)
                 }
             }
+            Toggle("Verify each file while the next one copies (spreads drive load)", isOn: $settings.pipelinedVerify)
+            Toggle("Keep Spotlight from indexing destination drives (.metadata_never_index)", isOn: $settings.preventSpotlight)
             Toggle("Auto-start when a card is inserted (uses the selected destinations)", isOn: $settings.autoStart)
             Toggle("Eject the card after it's verified", isOn: $settings.autoEject)
             Toggle("Skip files that already exist with identical verified hashes", isOn: $settings.skipIdentical)

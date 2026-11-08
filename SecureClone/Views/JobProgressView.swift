@@ -109,6 +109,9 @@ struct JobHeader: View {
                          v ? "\(VolumeInfo.format(job.verifyBytesDone)) / \(VolumeInfo.format(job.verifyTotalBytes))"
                            : "\(VolumeInfo.format(job.bytesProcessed)) / \(VolumeInfo.format(job.totalBytes))",
                          icon: "doc.on.doc")
+                    if !v && job.verifyBytesDone > 0 {
+                        stat("Verify", job.verifySpeedText + " · " + job.verifyPercentText, icon: "checkmark.shield")
+                    }
                     if job.skippedFileCount > 0 {
                         stat("Skipped", "\(job.skippedFileCount)", icon: "equal.circle")
                     }
@@ -165,7 +168,10 @@ struct DestinationProgressRow: View {
     let totalBytes: Int64
 
     private var fraction: Double {
-        totalBytes > 0 ? Double(progress.bytesCompleted) / Double(totalBytes) : 0
+        totalBytes > 0 ? min(1, Double(progress.bytesCompleted) / Double(totalBytes)) : 0
+    }
+    private var verifyFraction: Double {
+        totalBytes > 0 ? min(1, Double(progress.verifiedBytes) / Double(totalBytes)) : 0
     }
 
     var body: some View {
@@ -181,8 +187,16 @@ struct DestinationProgressRow: View {
                     Text("\(progress.filesCompleted) files written").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            ProgressView(value: fraction).tint(progress.failed ? .red : .green)
-            Text(VolumeInfo.format(progress.bytesCompleted)).font(.caption2).foregroundStyle(.secondary)
+            ProgressView(value: fraction).tint(progress.failed ? .red : .blue)
+            if progress.verifiedBytes > 0 {
+                ProgressView(value: verifyFraction).tint(progress.failed ? .red : .green).controlSize(.small)
+            }
+            HStack {
+                Text("written " + VolumeInfo.format(progress.bytesCompleted)).font(.caption2).foregroundStyle(.secondary)
+                if progress.verifiedBytes > 0 {
+                    Text("· verified " + VolumeInfo.format(progress.verifiedBytes)).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.06)))

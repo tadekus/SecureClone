@@ -3,6 +3,31 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.9 — 2026-11-08
+Sustained-throughput release, from a 700 GB T7-to-T7 field test where copy
+speed sagged late in the job and verification fell to 0 MB/s in cycles.
+### Added
+- **Pipelined verification** (default on): every file is read back from all
+  destinations as soon as it is written, while the next file copies. The
+  drives see one steady write stream plus one read stream instead of a
+  700 GB write burst followed by a 700 GB read burst — far gentler on SSDs
+  whose SLC cache and thermals give out under sustained load, and the job
+  finishes sooner because the two phases overlap. Resumed and skipped files
+  are verified first. The classic copy-then-verify order is still available
+  in Options.
+- **Spotlight prevention** (default on): a `.metadata_never_index` marker is
+  created at the root of each destination volume so `mds` does not index
+  hundreds of GB of fresh media while we read it back.
+- **Stall detector**: if no bytes move for 15 s during copy or verification
+  the log records when the drive went quiet and when it resumed, and the
+  speed / ETA fields say "stalled" instead of showing an absurd estimate.
+- **Slow-file hints**: a file copied at under 40 % of the job's typical speed
+  is flagged in the log with the percentage — the signature of an SSD whose
+  cache is exhausted or that is thermally throttling.
+- Per-file verification log line with time and per-drive MB/s.
+- Per-destination **verify bar** and "written / verified" byte counts; a
+  live verification speed is shown in the header while copying.
+
 ## 2.8 — 2026-11-08
 Reports and workflow release.
 ### Added

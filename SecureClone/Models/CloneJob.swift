@@ -64,6 +64,7 @@ final class DestinationProgress: Identifiable, ObservableObject {
     @Published var filesCompleted: Int = 0
     @Published var bytesCompleted: Int64 = 0
     @Published var verifiedCount: Int = 0
+    @Published var verifiedBytes: Int64 = 0
     @Published var failed: Bool = false
 
     init(volume: VolumeInfo) { self.volume = volume }
@@ -123,16 +124,29 @@ final class CloneJob: ObservableObject, Identifiable {
     private var verifyLastSampleTime: Date? = nil
     private var verifyLastSampleBytes: Int64 = 0
 
+    // Stall detection: seconds since the byte counter last advanced.
+    static let stallThreshold: Double = 15
+    @Published var copyStalledSeconds: Double = 0
+    @Published var verifyStalledSeconds: Double = 0
+    private var copyLastAdvance: (Date, Int64)? = nil
+    private var verifyLastAdvance: (Date, Int64)? = nil
+    var copyStalled: Bool { copyStalledSeconds >= Self.stallThreshold }
+    /// Verification only counts as stalled once it is the active phase; while
+    /// copying, the pipelined verifier is simply waiting for the next file.
+    var verifyStalled: Bool { verifyStalledSeconds >= Self.stallThreshold && state == .verifying }
+
     var verifyProgress: Double {
         verifyTotalBytes > 0 ? min(1, Double(verifyBytesDone) / Double(verifyTotalBytes)) : 0
     }
     var verifyPercentText: String { String(format: "%.1f%%", verifyProgress * 100) }
     var verifySpeedText: String {
+        if verifyStalled { return "stalled \(Int(verifyStalledSeconds)) s" }
         guard verifyBytesPerSecond > 0 else { return "—" }
         return VolumeInfo.format(Int64(verifyBytesPerSecond)) + "/s"
     }
     var verifyEtaText: String {
-        guard let e = verifyEtaSeconds else { return "calculating…" }
+        if verifyStalled { return "drive not responding" }
+        guard let e = verifyEtaSeconds, verifyBytesPerSecond >= 1_000_000 || e < 36_000 else { return "calculating…" }
         return Self.formatDuration(e)
     }
     var verifyElapsedText: String { Self.formatDuration(verifyElapsedSeconds) }
@@ -141,6 +155,11 @@ final class CloneJob: ObservableObject, Identifiable {
         verifyBytesDone = bytes
         if verifyStartedAt == nil { verifyStartedAt = now }
         verifyElapsedSeconds = now.timeIntervalSince(verifyStartedAt!)
+        if let last = verifyLastAdvance, last.1 == bytes {
+            verifyStalledSeconds = now.timeIntervalSince(last.0)
+        } else {
+            verifyLastAdvance = (now, bytes); verifyStalledSeconds = 0
+        }
         guard let lastT = verifyLastSampleTime else {
             verifyLastSampleTime = now; verifyLastSampleBytes = bytes; return
         }
@@ -196,6 +215,11 @@ final class CloneJob: ObservableObject, Identifiable {
         if let start = copyStartedAt {
             elapsedSeconds = now.timeIntervalSince(start)
         }
+        if let last = copyLastAdvance, last.1 == bytes {
+            copyStalledSeconds = now.timeIntervalSince(last.0)
+        } else {
+            copyLastAdvance = (now, bytes); copyStalledSeconds = 0
+        }
 
         guard let lastT = lastSampleTime else {
             lastSampleTime = now
@@ -220,12 +244,14 @@ final class CloneJob: ObservableObject, Identifiable {
     }
 
     var speedText: String {
+        if copyStalled { return "stalled \(Int(copyStalledSeconds)) s" }
         guard bytesPerSecond > 0 else { return "—" }
         return VolumeInfo.format(Int64(bytesPerSecond)) + "/s"
     }
 
     var etaText: String {
-        guard let eta = etaSeconds else { return "calculating…" }
+        if copyStalled { return "drive not responding" }
+        guard let eta = etaSeconds, bytesPerSecond >= 1_000_000 || eta < 36_000 else { return "calculating…" }
         return Self.formatDuration(eta)
     }
 

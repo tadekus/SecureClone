@@ -19,9 +19,15 @@ offload tools, in a small open-source app they can build themselves.
   concurrently — a slow drive never holds back a fast one
 - **xxHash64** by default (MD5 / SHA-256 available), hashed on its own thread
   while reading — the hasher never slows the drives
-- Every destination is **independently re-read and verified** after the copy;
-  writes are flushed to the physical disk before verification, so the OS cache
-  can never mask a bad write
+- Every destination is **independently re-read and verified** — by default
+  **pipelined**: each file is read back while the next one copies, so the
+  drives never face a huge write burst followed by a huge read burst; writes
+  are flushed to the physical disk before verification, so the OS cache can
+  never mask a bad write
+- **Stall detection** and **slow-file hints** in the log, and Spotlight kept
+  off destination drives (`.metadata_never_index`) — the usual causes of a
+  700 GB job slowing down late are made visible instead of leaving you with a
+  frozen ETA
 - Source is never written to (except, optionally, a report folder after
   verification) and system cruft (`.DS_Store`, `._*`, Spotlight) is skipped
 
@@ -128,8 +134,9 @@ Card ─► reader ──┼─► queue ─► writer thread ─► Drive B ─
 2. **Copy** — one reader thread streams 8 MB chunks, hashes them, and pushes
    each into a bounded queue per destination; each destination's writer thread
    drains its own queue. After each file, `fsync` and session checkpoint.
-3. **Verify** — every destination is re-read from disk concurrently and
-   compared to the source hash.
+3. **Verify** — as soon as a file is written, every destination's copy is
+   re-read from disk concurrently and compared to the source hash, while the
+   next file copies (or, optionally, all files after the copy phase).
 4. **Metadata** — read from the verified copy (never the card): ALE › MXF ›
    AVFoundation › BWF › ImageIO.
 5. **Reports** written; summary shown.
@@ -144,6 +151,7 @@ SecureClone/
 ├── Models/        VolumeInfo, CloneJob, JobSpec (naming), ClipMetadata, AppSettings, AppInfo
 ├── Services/
 │   ├── CloneEngine, ChunkQueue, CloneControl     copy pipeline + pause/stop
+│   ├── PipelinedVerifier                         verify while copying
 │   ├── ChecksumService, StreamingHasher          xxHash64 / MD5 / SHA-256
 │   ├── DriveMonitor, SourceScanner, ReelDetector volumes, files, reel names
 │   ├── SessionStore, HistoryStore, LogStore      resume, job history, log

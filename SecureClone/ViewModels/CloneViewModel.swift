@@ -445,6 +445,30 @@ final class CloneViewModel: ObservableObject {
 
     /// Free space that works on every file system. The "important usage"
     /// figure is APFS-only and reads as 0 on ExFAT / HFS+ / NTFS.
+    static func failureReason(_ outcome: FileCloneOutcome) -> String {
+        var why: [String] = []
+        if outcome.verified.values.contains(false) { why.append("hash mismatch") }
+        if outcome.sourceRereadOK == false { why.append("card re-read differs — unreliable card read") }
+        if outcome.byteCompareOK.values.contains(false) { why.append("byte compare differs") }
+        if why.isEmpty { why.append("not verified") }
+        return why.joined(separator: "; ")
+    }
+
+    enum SpotlightResult { case created, existed, failed(String) }
+
+    /// Create `.metadata_never_index` at the volume root so Spotlight leaves
+    /// the freshly written media alone while we read it back.
+    static func preventSpotlightIndexing(on volume: URL) -> SpotlightResult {
+        let marker = volume.appendingPathComponent(".metadata_never_index")
+        if FileManager.default.fileExists(atPath: marker.path) { return .existed }
+        do {
+            try Data().write(to: marker)
+            return .created
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
     static func freeSpace(on volume: URL, fallback: Int64) -> Int64 {
         let keys: Set<URLResourceKey> = [.volumeAvailableCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
         guard let v = try? volume.resourceValues(forKeys: keys) else { return fallback }
@@ -503,6 +527,15 @@ final class CloneViewModel: ObservableObject {
                 let n = CloneEngine.removePartials(under: root)
                 if n > 0 { log.log("Removed \(n) leftover partial file\(n == 1 ? "" : "s") on \(root.lastPathComponent)", level: .warn) }
             }
+            if settings.preventSpotlight {
+                for dest in job.destinations {
+                    switch Self.preventSpotlightIndexing(on: dest.url) {
+                    case .created: log.log("Spotlight indexing disabled on \(dest.name) (.metadata_never_index)")
+                    case .existed: break
+                    case .failed(let e): log.log("Could not disable Spotlight on \(dest.name): \(e) — if verification stalls, run: mdutil -i off \"\(dest.url.path)\"", level: .warn)
+                    }
+                }
+            }
 
             // 1. RESUME records
             var copied: [CopiedFile] = []
@@ -557,13 +590,84 @@ final class CloneViewModel: ObservableObject {
             let progress = ProgressThrottle()
             progress.add(Int(copied.reduce(0) { $0 + $1.source.size }))
             let poller = Task { @MainActor [weak self] in
+                var wasStalled = false
                 while !Task.isCancelled {
                     guard let self, let j = self.job else { break }
-                    if j.state != .paused { j.recordProgress(bytes: progress.snapshot()) }
+                    if j.state != .paused {
+                        j.recordProgress(bytes: progress.snapshot())
+                        if j.copyStalled != wasStalled {
+                            wasStalled = j.copyStalled
+                            if wasStalled {
+                                self.log.log("⚠ No data written for \(Int(CloneJob.stallThreshold)) s during \(j.currentFile) — a destination drive stopped accepting writes (SSD cache flush / thermal throttling / Spotlight indexing?)", level: .warn)
+                            } else {
+                                self.log.log("▶ Writes resumed")
+                            }
+                        }
+                    }
                     try? await Task.sleep(nanoseconds: 250_000_000)
                 }
             }
             defer { poller.cancel() }
+
+            // Verification progress (started now when pipelined, else after the copy).
+            var passes = Int64(max(1, job.destinations.count))
+            if mode.rereadsSource { passes += 1 }
+            if mode.byteCompare { passes += Int64(2 * max(1, job.destinations.count)) }
+            job.verifyTotalBytes = job.totalBytes * passes
+            job.verifyBytesDone = 0
+            let verifyProgress = ProgressThrottle()
+            let verifiedCounter = ProgressThrottle()
+            let verifyPoller = Task { @MainActor [weak self] in
+                var wasStalled = false
+                while !Task.isCancelled {
+                    guard let self, let j = self.job else { break }
+                    if j.state != .paused {
+                        j.recordVerifyProgress(bytes: verifyProgress.snapshot())
+                        if j.verifyStalled != wasStalled {
+                            wasStalled = j.verifyStalled
+                            if wasStalled {
+                                self.log.log("⚠ No data read for \(Int(CloneJob.stallThreshold)) s during verification — a drive stopped responding (SSD cache folding / thermal throttling / Spotlight indexing?)", level: .warn)
+                            } else {
+                                self.log.log("▶ Reads resumed")
+                            }
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+            }
+            defer { verifyPoller.cancel() }
+
+            let pipelined = settings.pipelinedVerify && mode.hashes
+            var verifier: PipelinedVerifier? = nil
+            if pipelined {
+                job.verifyStartedAt = Date()
+                verifier = PipelinedVerifier(
+                    engine: engine, roots: destinationRoots, algorithm: algorithm, mode: mode, control: control,
+                    onBytes: { verifyProgress.add(Int($0)) },
+                    onFileDone: { [weak self] outcome, seconds in
+                        if outcome.allVerified { verifiedCounter.add(1) }
+                        Task { @MainActor [weak self] in
+                            guard let self, let j = self.job else { return }
+                            for (dp, root) in zip(j.destinationProgress, destinationRoots) {
+                                guard let ok = outcome.verified[root] else { continue }
+                                dp.verifiedBytes += outcome.size
+                                if ok && (outcome.byteCompareOK[root] ?? true) { dp.verifiedCount += 1 } else { dp.failed = true }
+                            }
+                            let perDrive = seconds > 0 ? Double(outcome.size) / seconds / 1_000_000 : 0
+                            if outcome.allVerified {
+                                self.log.log("✓ \(outcome.relativePath)  verified \(VolumeInfo.format(outcome.size)) in \(CloneJob.formatDuration(seconds)) (\(String(format: "%.0f", perDrive)) MB/s per drive)")
+                            } else {
+                                self.log.log("✗ FAILED \(outcome.relativePath): \(Self.failureReason(outcome))", level: .error)
+                            }
+                        }
+                    })
+                // Resumed / already-present files are verified first.
+                for c in copied { verifier?.submit(c) }
+                log.log("Pipelined verification on: each file is read back while the next one copies.")
+            }
+
+            // Slow-file hints: compare each file's copy speed with the running median.
+            var speedSamples: [Double] = []
 
             for file in files where !skip.contains(file.relativePath) {
                 if control.isCancelled { throw CloneEngineError.cancelled }
@@ -619,10 +723,23 @@ final class CloneViewModel: ObservableObject {
                                             onChunk: { progress.add($0) })
                     }.value
                     result = r
-                    log.log("→ \(file.relativePath)  \(VolumeInfo.format(file.size)) in \(CloneJob.formatDuration(r.seconds)) (\(String(format: "%.0f", r.mbps)) MB/s)  [\(r.sourceHash)]")
+                    var line = "→ \(file.relativePath)  \(VolumeInfo.format(file.size)) in \(CloneJob.formatDuration(r.seconds)) (\(String(format: "%.0f", r.mbps)) MB/s)  [\(r.sourceHash)]"
+                    var slow = false
+                    if file.size >= 256 * 1024 * 1024, r.mbps > 0 {
+                        if speedSamples.count >= 3 {
+                            let median = speedSamples.sorted()[speedSamples.count / 2]
+                            if r.mbps < 0.4 * median {
+                                slow = true
+                                line += "  ⚠ slow: \(String(format: "%.0f", 100 * r.mbps / median))% of the job's typical \(String(format: "%.0f", median)) MB/s — drive cache exhausted or throttling?"
+                            }
+                        }
+                        speedSamples.append(r.mbps)
+                    }
+                    log.log(line, level: slow ? .warn : .info)
                 }
                 guard let done = result else { continue }
                 copied.append(done)
+                verifier?.submit(done)
 
                 for dp in job.destinationProgress { dp.filesCompleted += 1; dp.bytesCompleted += file.size }
 
@@ -642,34 +759,25 @@ final class CloneViewModel: ObservableObject {
             if let start = job.copyStartedAt { job.elapsedSeconds = Date().timeIntervalSince(start) }
             log.log("Copy complete in \(job.elapsedText)"
                     + (job.skippedFileCount > 0 ? " (\(job.skippedFileCount) identical files skipped)" : "")
-                    + ". Verifying all destinations in parallel…")
+                    + (pipelined ? ". Finishing verification of the remaining files…" : ". Verifying all destinations in parallel…"))
 
             // 4. VERIFY
             job.state = .verifying
             job.currentFile = ""
-            var passes = Int64(max(1, job.destinations.count))
-            if mode.rereadsSource { passes += 1 }
-            if mode.byteCompare { passes += Int64(2 * max(1, job.destinations.count)) }
-            job.verifyTotalBytes = job.totalBytes * passes
-            job.verifyBytesDone = 0
-            let verifyProgress = ProgressThrottle()
-            job.verifyStartedAt = Date()
-            let verifyPoller = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    guard let self, let j = self.job else { break }
-                    if j.state != .paused { j.recordVerifyProgress(bytes: verifyProgress.snapshot()) }
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                }
-            }
+            if job.verifyStartedAt == nil { job.verifyStartedAt = Date() }
             journal.phase = "verifying"; journal.updatedAt = Date(); ActiveRunStore.write(journal)
-            let verifiedCounter = ProgressThrottle()
-            let copiedSnapshot = copied
-            let outcomes = await Task.detached(priority: .userInitiated) {
-                engine.verify(copied: copiedSnapshot, destinationRoots: destinationRoots,
-                              algorithm: algorithm, mode: mode, control: control,
-                              onFileVerified: { _, _, ok in if ok { verifiedCounter.add(1) } },
-                              onBytes: { verifyProgress.add(Int($0)) })
-            }.value
+            let outcomes: [FileCloneOutcome]
+            if let v = verifier {
+                outcomes = await v.drain()
+            } else {
+                let copiedSnapshot = copied
+                outcomes = await Task.detached(priority: .userInitiated) {
+                    engine.verify(copied: copiedSnapshot, destinationRoots: destinationRoots,
+                                  algorithm: algorithm, mode: mode, control: control,
+                                  onFileVerified: { _, _, ok in if ok { verifiedCounter.add(1) } },
+                                  onBytes: { verifyProgress.add(Int($0)) })
+                }.value
+            }
             journal.verifiedFiles = Int(verifiedCounter.snapshot()); journal.phase = "reporting"; ActiveRunStore.write(journal)
             verifyPoller.cancel()
             job.finishVerifyProgress()
@@ -682,17 +790,16 @@ final class CloneViewModel: ObservableObject {
                 fr.verified = outcome.verified
                 fr.fullyVerified = outcome.allVerified
                 job.fileResults.append(fr)
-                for (dp, root) in zip(job.destinationProgress, destinationRoots) {
-                    if let ok = outcome.verified[root] {
-                        if ok { dp.verifiedCount += 1 } else { dp.failed = true }
+                if !pipelined {
+                    for (dp, root) in zip(job.destinationProgress, destinationRoots) {
+                        if let ok = outcome.verified[root] {
+                            dp.verifiedBytes += outcome.size
+                            if ok { dp.verifiedCount += 1 } else { dp.failed = true }
+                        }
                     }
-                }
-                if !outcome.allVerified && mode.hashes {
-                    var why: [String] = []
-                    if outcome.verified.values.contains(false) { why.append("hash mismatch") }
-                    if outcome.sourceRereadOK == false { why.append("card re-read differs — unreliable card read") }
-                    if outcome.byteCompareOK.values.contains(false) { why.append("byte compare differs") }
-                    log.log("✗ FAILED \(outcome.relativePath): \(why.joined(separator: "; "))", level: .error)
+                    if !outcome.allVerified && mode.hashes {
+                        log.log("✗ FAILED \(outcome.relativePath): \(Self.failureReason(outcome))", level: .error)
+                    }
                 }
             }
 
