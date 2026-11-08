@@ -39,8 +39,22 @@ cp Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
 echo -n "APPL????" > "$APP/Contents/PkgInfo"
 
-echo "▶ Ad-hoc signing…"
-codesign --force --deep --sign - "$APP"
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    echo "▶ Signing with Developer ID: $SIGN_IDENTITY"
+    cat > build/entitlements.plist <<'EOP'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.disable-library-validation</key><false/>
+</dict></plist>
+EOP
+    codesign --force --deep --options runtime --timestamp --entitlements build/entitlements.plist \
+             --sign "$SIGN_IDENTITY" "$APP"
+    codesign --verify --deep --strict "$APP"
+else
+    echo "▶ Ad-hoc signing…"
+    codesign --force --deep --sign - "$APP"
+fi
 
 echo "▶ Zipping…"
 ZIP="build/SecureClone-$VERSION-build$BUILD.zip"

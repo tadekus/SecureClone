@@ -54,6 +54,9 @@ struct SecureCloneApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { vm.checkForUpdates(manual: true) }
+            }
         }
 
         // MenuBarExtra writes its `isInserted` binding back on every update.
@@ -156,6 +159,7 @@ struct MenuBarMenu: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         .keyboardShortcut("o")
+        Button("Check for Updates…") { vm.checkForUpdates(manual: true) }
         Button("Quit") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }

@@ -44,13 +44,20 @@ offload tools, in a small open-source app they can build themselves.
 - **Shooting-day summary** across all cards; searchable, persisted **log**;
   **menu-bar** item that keeps jobs running with the window closed
 
+**Verification modes**: Quick (copy only), Standard (hash + read-back),
+Thorough (+ card re-read, MD5 second digest), Paranoid (+ byte-by-byte).
+Source-stability checks, `F_FULLFSYNC`, temp-and-rename publishing, a safety
+validator (same physical disk, nesting, symlinks, online-only files) and a
+crash journal back every verdict.
+
 **Reports** (in `SecureClone_Logs/` of every destination folder, optionally the card)
-- `.mhl` — ASC Media Hash List v1.1
-- `.txt` — human-readable job report
+- `.mhl` — classic MHL 1.1, plus `ascmhl/` ASC MHL 2.0 generations and chain
+- `.txt`, `.pdf`, `.json` — job report (verdict, per-file times and speeds, hashes)
 - `.csv` — Silverstack-style clip list (`;`-separated, `XXH64BE:` hashes)
 - `_thumbs.jpg` — contact sheet of clip thumbnails
-- `DAY_<date>_SUMMARY.txt/.csv` — all cards of the day (at the drive root)
+- `DAY_<date>_SUMMARY.txt/.csv/.pdf` — all cards of the day (at the drive root)
 - `VERIFY_<manifest>_<date>.txt` — verify-only results
+- Optional off-site copy of each verified card via rsync over SSH
 
 **Clip metadata** (fills the CSV, shown in the in-app clip grid)
 | Source | What it provides |
@@ -68,11 +75,13 @@ is planned — see Roadmap.
 
 ## Install
 
-Download the latest `SecureClone-<version>-build<N>.zip` from the
-[Actions](../../actions) tab (open the newest green run → **Artifacts**), unzip,
-and drag `SecureClone.app` into Applications.
+Download the latest `SecureClone-<version>-build<N>.zip` from
+[Releases](../../releases/latest), unzip, and drag `SecureClone.app` into
+Applications. The app checks for new releases daily.
 
-The app is ad-hoc signed, not notarized. On first launch **right-click → Open**.
+Builds are ad-hoc signed unless the repository has Apple signing secrets
+(see `.github/workflows/build.yml`), in which case they are Developer ID-signed
+and notarized. For an ad-hoc build, on first launch **right-click → Open**.
 If macOS says the app is "damaged", clear the download quarantine once:
 
 ```

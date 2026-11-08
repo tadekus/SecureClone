@@ -23,6 +23,16 @@ final class AppSettings: ObservableObject {
     @Published var verificationMode: VerificationMode { didSet { save() } }
     @Published var copyAppleDouble: Bool    { didSet { save() } }
     @Published var allowSamePhysicalDisk: Bool { didSet { save() } }
+    @Published var writePDF: Bool           { didSet { save() } }
+    @Published var writeJSON: Bool          { didSet { save() } }
+    @Published var writeASCMHL: Bool        { didSet { save() } }
+    @Published var notifications: Bool      { didSet { save() } }
+    @Published var checkUpdates: Bool       { didSet { save() } }
+    @Published var remoteEnabled: Bool      { didSet { save() } }
+    @Published var remoteTarget: String     { didSet { save() } }
+    @Published var remoteIdentity: String   { didSet { save() } }
+    @Published var remoteBandwidthKBps: Int { didSet { save() } }
+    @Published var lastUpdateCheck: Date?   { didSet { save() } }
     /// Last-used destination volume paths, so a new card can auto-start.
     @Published var rememberedDestinations: [String] { didSet { save() } }
 
@@ -43,6 +53,16 @@ final class AppSettings: ObservableObject {
         verificationMode = VerificationMode(rawValue: d.string(forKey: "verificationMode") ?? "") ?? .standard
         copyAppleDouble = d.bool(forKey: "copyAppleDouble")
         allowSamePhysicalDisk = d.bool(forKey: "allowSamePhysicalDisk")
+        writePDF = d.object(forKey: "writePDF") as? Bool ?? true
+        writeJSON = d.object(forKey: "writeJSON") as? Bool ?? true
+        writeASCMHL = d.object(forKey: "writeASCMHL") as? Bool ?? true
+        notifications = d.object(forKey: "notifications") as? Bool ?? true
+        checkUpdates = d.object(forKey: "checkUpdates") as? Bool ?? true
+        remoteEnabled = d.bool(forKey: "remoteEnabled")
+        remoteTarget = d.string(forKey: "remoteTarget") ?? ""
+        remoteIdentity = d.string(forKey: "remoteIdentity") ?? ""
+        remoteBandwidthKBps = d.integer(forKey: "remoteBandwidthKBps")
+        lastUpdateCheck = d.object(forKey: "lastUpdateCheck") as? Date
         rememberedDestinations = d.stringArray(forKey: "rememberedDestinations") ?? []
         loading = false
     }
@@ -74,6 +94,11 @@ final class AppSettings: ObservableObject {
         d.set(verificationMode.rawValue, forKey: "verificationMode")
         d.set(copyAppleDouble, forKey: "copyAppleDouble")
         d.set(allowSamePhysicalDisk, forKey: "allowSamePhysicalDisk")
+        d.set(writePDF, forKey: "writePDF"); d.set(writeJSON, forKey: "writeJSON"); d.set(writeASCMHL, forKey: "writeASCMHL")
+        d.set(notifications, forKey: "notifications"); d.set(checkUpdates, forKey: "checkUpdates")
+        d.set(remoteEnabled, forKey: "remoteEnabled"); d.set(remoteTarget, forKey: "remoteTarget")
+        d.set(remoteIdentity, forKey: "remoteIdentity"); d.set(remoteBandwidthKBps, forKey: "remoteBandwidthKBps")
+        d.set(lastUpdateCheck, forKey: "lastUpdateCheck")
         d.set(rememberedDestinations, forKey: "rememberedDestinations")
     }
 }

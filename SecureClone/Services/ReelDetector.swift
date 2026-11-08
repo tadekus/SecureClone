@@ -57,14 +57,49 @@ enum ReelDetector {
         if paths.contains(where: { $0.hasPrefix("DCIM/") && $0.contains("DJI_") }) {
             return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "DJI")
         }
-        // Sony / Canon structured cards
-        if paths.contains(where: { $0.hasPrefix("XDROOT/") || $0.hasPrefix("PRIVATE/M4ROOT/") }) {
-            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Sony")
+        // Panasonic: P2 (CONTENTS/VIDEO, CONTENTS/CLIP) or Varicam/EVA (PRIVATE/PANA_GRP), or filenames A001C001_…
+        if paths.contains(where: { $0.hasPrefix("CONTENTS/VIDEO/") || $0.hasPrefix("PRIVATE/PANA_GRP/") || $0.hasPrefix("CONTENTS/CLIP/") }) {
+            if let m = firstMatch(#"^([A-Z])(\d{3})C\d{3}_"#, in: names) {
+                return ReelInfo(reel: "\(m[1])\(m[2])", camera: m[1], system: "Panasonic")
+            }
+            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Panasonic")
         }
-        if paths.contains(where: { $0.hasPrefix("CONTENTS/CLIPS") }) {
+        // Sony: XDROOT or PRIVATE/M4ROOT (XML sidecars carry the camera model)
+        if paths.contains(where: { $0.hasPrefix("XDROOT/") || $0.hasPrefix("PRIVATE/M4ROOT/") }) {
+            let model = sonyModel(root: volume.url, paths: paths)
+            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: model.map { "Sony \($0)" } ?? "Sony")
+        }
+        // Canon: CONTENTS/CLIPS001 (XF) or DCIM/100CANON
+        if paths.contains(where: { $0.hasPrefix("CONTENTS/CLIPS") || $0.range(of: #"^DCIM/\d{3}CANON/"#, options: .regularExpression) != nil }) {
             return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Canon")
         }
+        // Fujifilm: DCIM/1xx_FUJI
+        if paths.contains(where: { $0.range(of: #"^DCIM/\d{3}_FUJI/"#, options: .regularExpression) != nil }) {
+            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Fujifilm")
+        }
+        // GoPro: DCIM/1xxGOPRO, GX010001.MP4 / GH010001.MP4
+        if paths.contains(where: { $0.range(of: #"^DCIM/\d{3}GOPRO/"#, options: .regularExpression) != nil }) ||
+           names.contains(where: { $0.range(of: #"^G[HX]\d{6}\.MP4$"#, options: [.regularExpression, .caseInsensitive]) != nil }) {
+            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "GoPro")
+        }
+        // Insta360: VID_20260101_120000_00_001.insv / LRV
+        if names.contains(where: { $0.range(of: #"^(VID|LRV|IMG)_\d{8}_\d{6}_"#, options: .regularExpression) != nil && ($0.lowercased().hasSuffix(".insv") || $0.lowercased().hasSuffix(".insp")) }) {
+            return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Insta360")
+        }
         return ReelInfo(reel: sanitize(volume.name), camera: nil, system: "Generic")
+    }
+
+    /// Sony cards carry an XML per clip (…M01.XML) with the camera model.
+    private static func sonyModel(root: URL, paths: [String]) -> String? {
+        guard let xmlPath = paths.first(where: { $0.uppercased().hasSuffix("M01.XML") }) else { return nil }
+        guard let data = try? Data(contentsOf: root.appendingPathComponent(xmlPath)),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        // <Device manufacturer="Sony" modelName="ILME-FX3" serialNo="…"/>
+        if let r = text.range(of: #"modelName="([^"]+)""#, options: .regularExpression) {
+            let m = String(text[r])
+            return m.replacingOccurrences(of: "modelName=\"", with: "").replacingOccurrences(of: "\"", with: "")
+        }
+        return nil
     }
 
     // MARK: - Helpers

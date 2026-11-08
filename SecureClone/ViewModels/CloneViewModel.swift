@@ -66,6 +66,9 @@ final class CloneViewModel: ObservableObject {
     @Published var showSummary = false
     @Published var errorMessage: String? = nil
     @Published var showError = false
+    @Published var availableUpdate: UpdateInfo? = nil
+    @Published var showUpdatePrompt = false
+    @Published var remoteRunning = false
 
     private let engine = CloneEngine()
     private var control = CloneControl()
@@ -94,6 +97,12 @@ final class CloneViewModel: ObservableObject {
             .store(in: &cancellables)
         let remembered = Set(settings.rememberedDestinations)
         selectedDestinations = Set(monitor.volumes.filter { remembered.contains($0.url.path) })
+
+        if settings.notifications { Notifier.requestPermission() }
+        if settings.checkUpdates,
+           settings.lastUpdateCheck.map({ Date().timeIntervalSince($0) > 86_400 }) ?? true {
+            checkForUpdates(manual: false)
+        }
 
         if let r = ActiveRunStore.takeLeftover() {
             let when = DateFormatter.localizedString(from: r.updatedAt, dateStyle: .short, timeStyle: .short)
@@ -702,13 +711,33 @@ final class CloneViewModel: ObservableObject {
                                               sourceFolder: spec.sourceFolder, mode: mode)
             let csv = CSVReportWriter.make(outcomes: outcomes, metadata: clips, algorithm: algorithm)
             var locations: [URL] = []
+            let okForReports = mode.hashes && job.allDestinationsVerified
+            let jsonReport = JSONReportWriter.make(jobName: jobName, source: job.source, sourceFolder: spec.sourceFolder,
+                                                   destinations: job.destinations, destinationFolders: destinationRoots,
+                                                   outcomes: outcomes, metadata: clips, algorithm: algorithm, mode: mode,
+                                                   startDate: startDate, finishDate: finishDate,
+                                                   skipped: job.skippedFileCount, verified: okForReports)
             for root in destinationRoots {
                 if mode.hashes {
                     try MHLWriter.write(destinationRoot: root, outcomes: outcomes, algorithm: algorithm,
                                         startDate: startDate, finishDate: finishDate, jobName: jobName)
+                    if settings.writeASCMHL && okForReports {
+                        do { try ASCMHLWriter.write(root: root, outcomes: outcomes, algorithm: algorithm,
+                                                    startDate: startDate, finishDate: finishDate, jobName: jobName) }
+                        catch { log.log("ASC MHL not written on \(root.lastPathComponent): \(error.localizedDescription)", level: .warn) }
+                    }
                 }
                 let u = try LogWriter.write(report: report, to: root, jobName: jobName, finishDate: finishDate)
                 try CSVReportWriter.write(csv: csv, to: root, jobName: jobName, finishDate: finishDate)
+                if settings.writeJSON { try? JSONReportWriter.write(jsonReport, to: root, jobName: jobName, finishDate: finishDate) }
+                if settings.writePDF {
+                    do { try PDFReportWriter.writeJob(to: root, jobName: jobName, finishDate: finishDate,
+                                                      source: job.source, sourceFolder: spec.sourceFolder,
+                                                      destinations: job.destinations, destinationFolders: destinationRoots,
+                                                      outcomes: outcomes, clips: clips, algorithm: algorithm, mode: mode,
+                                                      startDate: startDate, skipped: job.skippedFileCount, verified: okForReports) }
+                    catch { log.log("PDF not written on \(root.lastPathComponent): \(error.localizedDescription)", level: .warn) }
+                }
                 locations.append(u.deletingLastPathComponent())
             }
             log.log("Reports written to \(locations.count) destination\(locations.count == 1 ? "" : "s").")
@@ -716,6 +745,13 @@ final class CloneViewModel: ObservableObject {
                 do {
                     let u = try LogWriter.write(report: report, to: job.source.url, jobName: jobName, finishDate: finishDate)
                     try CSVReportWriter.write(csv: csv, to: job.source.url, jobName: jobName, finishDate: finishDate)
+                    if settings.writePDF {
+                        try? PDFReportWriter.writeJob(to: job.source.url, jobName: jobName, finishDate: finishDate,
+                                                      source: job.source, sourceFolder: spec.sourceFolder,
+                                                      destinations: job.destinations, destinationFolders: destinationRoots,
+                                                      outcomes: outcomes, clips: clips, algorithm: algorithm, mode: mode,
+                                                      startDate: startDate, skipped: job.skippedFileCount, verified: okForReports)
+                    }
                     locations.append(u.deletingLastPathComponent())
                 } catch {
                     log.log("Could not write report to source: \(error.localizedDescription)", level: .warn)
@@ -749,8 +785,17 @@ final class CloneViewModel: ObservableObject {
                 newestFileDate: files.compactMap { $0.modificationDate }.max()))
             for dest in job.destinations {
                 _ = try? DaySummaryWriter.write(for: finishDate, to: dest.url, project: settings.project)
+                if settings.writePDF { _ = try? PDFReportWriter.writeDay(for: finishDate, to: dest.url, project: settings.project) }
             }
             showSummary = true
+            if settings.notifications {
+                Notifier.post(title: ok ? "\(jobName) verified" : (mode.hashes ? "\(jobName) FAILED verification" : "\(jobName) copied (not verified)"),
+                              body: "\(outcomes.count) files, \(VolumeInfo.format(job.totalBytes)) → \(job.destinations.map { $0.name }.joined(separator: ", "))"
+                                    + (ok ? " — safe to wipe the card" : ""))
+            }
+            if ok && settings.remoteEnabled && !settings.remoteTarget.isEmpty {
+                startRemoteBackup(folder: destinationRoots[0], relative: spec.relativeFolder.isEmpty ? jobName : spec.relativeFolder)
+            }
 
             // 8. AUTO-EJECT (source only; thumbnails read from the destination)
             var ejected = false
@@ -782,6 +827,69 @@ final class CloneViewModel: ObservableObject {
         isRunning = false
         if queue.isEmpty { endActivity() }
         runNextIfIdle()
+    }
+
+    // MARK: - Off-site copy
+
+    private func startRemoteBackup(folder: URL, relative: String) {
+        let target = settings.remoteTarget
+        let identity = settings.remoteIdentity
+        let bw = settings.remoteBandwidthKBps
+        let control = CloneControl()
+        remoteRunning = true
+        log.log("☁️ Off-site copy → \(target)/\(relative) (rsync over SSH)…")
+        Task.detached(priority: .utility) { [weak self] in
+            var lastPosted = Date.distantPast
+            let r = RemoteBackup.run(folder: folder, relative: relative, target: target, identity: identity,
+                                     bandwidthKBps: bw, control: control) { line in
+                // rsync --info=progress2 emits many lines; post one every few seconds.
+                if Date().timeIntervalSince(lastPosted) > 3 || line.lowercased().contains("error") || line.contains("rsync:") {
+                    lastPosted = Date()
+                    Task { @MainActor in self?.log.log("   ☁️ \(line)") }
+                }
+            }
+            await MainActor.run {
+                self?.remoteRunning = false
+                self?.log.log(r.ok ? "☁️ Off-site copy complete in \(CloneJob.formatDuration(r.seconds))"
+                                   : "☁️ Off-site copy FAILED: \(r.lastLine)", level: r.ok ? .ok : .error)
+                if self?.settings.notifications == true {
+                    Notifier.post(title: r.ok ? "Off-site copy complete" : "Off-site copy failed", body: "\(relative) → \(target)", sound: false)
+                }
+            }
+        }
+    }
+
+    func testRemote() {
+        let target = settings.remoteTarget, id = settings.remoteIdentity
+        log.log("Testing SSH connection to \(target)…")
+        Task.detached { [weak self] in
+            let (ok, msg) = RemoteBackup.test(target: target, identity: id)
+            await MainActor.run {
+                self?.log.log(ok ? "SSH connection OK" : "SSH connection failed: \(msg)", level: ok ? .ok : .error)
+                if !ok { self?.presentError("SSH connection failed:\n\(msg)\n\nThe target must be user@host:/path and your SSH key must be accepted without a password.") }
+            }
+        }
+    }
+
+    // MARK: - Updates
+
+    func checkForUpdates(manual: Bool) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.settings.lastUpdateCheck = Date()
+            if let info = await UpdateChecker.check() {
+                if UpdateChecker.isNewer(info) {
+                    self.availableUpdate = info
+                    self.showUpdatePrompt = true
+                    self.log.log("Update available: \(info.version) (build \(info.build))")
+                } else if manual {
+                    self.log.log("You're up to date (\(AppInfo.versionString)).", level: .ok)
+                    self.presentError("You're running the latest version (\(AppInfo.versionString)).")
+                }
+            } else if manual {
+                self.presentError("Could not reach GitHub to check for updates.")
+            }
+        }
     }
 
     private func startThumbnailPass(job: CloneJob, root: URL, extraRoots: [URL], jobName: String, finishDate: Date) {

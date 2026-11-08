@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var vm: CloneViewModel
@@ -77,6 +78,16 @@ struct ContentView: View {
         .alert("SecureClone", isPresented: $vm.showError) {
             Button("OK", role: .cancel) { }
         } message: { Text(vm.errorMessage ?? "") }
+        .alert("Update available", isPresented: $vm.showUpdatePrompt) {
+            Button("Download") {
+                if let u = vm.availableUpdate { NSWorkspace.shared.open(u.assetURL ?? u.url) }
+            }
+            Button("Later", role: .cancel) { }
+        } message: {
+            if let u = vm.availableUpdate {
+                Text("SecureClone \(u.version) (build \(u.build)) is available. You have \(AppInfo.versionString).")
+            }
+        }
     }
 
     // MARK: - Header
@@ -172,6 +183,36 @@ struct ContentView: View {
             Toggle("Show in menu bar (keeps running when the window is closed)", isOn: $settings.showInMenuBar)
             Toggle("Copy ._ sidecar files (AppleDouble resource forks)", isOn: $settings.copyAppleDouble)
             Toggle("Allow two backups on the same physical disk (not recommended)", isOn: $settings.allowSamePhysicalDisk)
+            Toggle("Notify when a job finishes", isOn: $settings.notifications)
+            Toggle("Check for updates daily", isOn: $settings.checkUpdates)
+
+            Label("Reports", systemImage: "doc.text").font(.headline).padding(.top, 6)
+            Text("Always: text, CSV (Silverstack format), classic MHL 1.1, day summary.").font(.caption2).foregroundStyle(.secondary)
+            Toggle("PDF report + PDF day summary", isOn: $settings.writePDF)
+            Toggle("JSON report (machine-readable)", isOn: $settings.writeJSON)
+            Toggle("ASC MHL 2.0 chain (ascmhl/ folder, next to the classic MHL)", isOn: $settings.writeASCMHL)
+
+            Label("Off-site copy after verification", systemImage: "icloud.and.arrow.up").font(.headline).padding(.top, 6)
+            Toggle("Send each verified card to a server with rsync over SSH", isOn: $settings.remoteEnabled)
+            HStack(spacing: 8) {
+                Text("Target").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                TextField("user@host:/path/to/footage", text: $settings.remoteTarget)
+                    .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))
+            }
+            HStack(spacing: 8) {
+                Text("SSH key").foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                TextField("~/.ssh/id_ed25519 (optional)", text: $settings.remoteIdentity)
+                    .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))
+                Text("Limit").foregroundStyle(.secondary)
+                TextField("KB/s", value: $settings.remoteBandwidthKBps, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 70)
+                Button("Test") { vm.testRemote() }.controlSize(.small)
+                    .disabled(settings.remoteTarget.isEmpty)
+            }
+            .disabled(!settings.remoteEnabled)
+            if vm.remoteRunning {
+                HStack { ProgressView().controlSize(.small); Text("Off-site copy running…").font(.caption) }
+            }
         }
         .toggleStyle(.checkbox)
         .font(.caption)

@@ -3,6 +3,27 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.8 — 2026-11-08
+Reports and workflow release.
+### Added
+- **PDF report** per job (verdict banner, destinations, per-file table with
+  times and speeds, clip thumbnails) and a **PDF shooting-day summary**.
+- **JSON report** with every hash, verification result, timing and clip
+  metadata (`secureclone-report/1` schema) for automated pipelines.
+- **ASC MHL 2.0** generation files in an `ascmhl/` folder with an
+  `ascmhl_chain.txt`, written next to the classic MHL 1.1 (file hashes,
+  process info, chain; no directory hashes).
+- **Off-site copy** after a verified offload: rsync over SSH to
+  `user@host:/path`, optional key and bandwidth limit, progress in the log,
+  connection test button.
+- **Camera detection** for Panasonic (P2 / Varicam / EVA), Fujifilm, GoPro,
+  Insta360 and Canon DCIM, plus the Sony camera model read from its XML.
+- **Notifications** when a job or off-site copy finishes.
+- **Update check** against GitHub Releases (daily and on demand).
+- **CI**: a GitHub Release with the zip for every build on main; Developer ID
+  signing and notarization switch on automatically once the Apple secrets
+  are set in the repository.
+
 ## 2.7 — 2026-11-08
 Engine and safety release.
 ### Added
