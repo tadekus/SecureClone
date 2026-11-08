@@ -3,6 +3,12 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.5 — 2026-11-08
+### Fixed
+- Free-space check reported "has Zero KB" on ExFAT / HFS+ / NTFS drives and
+  refused to start: it used an APFS-only capacity figure. Now uses the plain
+  available capacity, with the APFS figure only when it's non-zero.
+
 ## 2.4 — 2026-11-08
 ### Fixed
 - **Launch hang — root cause found** (from a symbolized process sample):

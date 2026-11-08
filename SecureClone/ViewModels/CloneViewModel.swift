@@ -397,6 +397,16 @@ final class CloneViewModel: ObservableObject {
 
     private func presentError(_ m: String) { errorMessage = m; showError = true }
 
+    /// Free space that works on every file system. The "important usage"
+    /// figure is APFS-only and reads as 0 on ExFAT / HFS+ / NTFS.
+    static func freeSpace(on volume: URL, fallback: Int64) -> Int64 {
+        let keys: Set<URLResourceKey> = [.volumeAvailableCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
+        guard let v = try? volume.resourceValues(forKeys: keys) else { return fallback }
+        if let imp = v.volumeAvailableCapacityForImportantUsage, imp > 0 { return imp }
+        if let plain = v.volumeAvailableCapacity, plain > 0 { return Int64(plain) }
+        return fallback
+    }
+
     // MARK: - Sleep prevention
 
     private func beginActivity() {
@@ -462,8 +472,8 @@ final class CloneViewModel: ObservableObject {
             // 2. BLOCKING free-space check
             let remaining = files.filter { !skip.contains($0.relativePath) }.reduce(Int64(0)) { $0 + $1.size }
             for (dest, root) in zip(job.destinations, destinationRoots) {
-                let free = (try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-                                .volumeAvailableCapacityForImportantUsage) ?? dest.availableCapacity
+                let free = Self.freeSpace(on: dest.url, fallback: dest.availableCapacity)
+                _ = root
                 if free < remaining {
                     throw NSError(domain: "SecureClone", code: 1, userInfo: [NSLocalizedDescriptionKey:
                         "Not enough space on \(dest.name): needs \(VolumeInfo.format(remaining)), has \(VolumeInfo.format(free)) — short by \(VolumeInfo.format(remaining - free))"])
