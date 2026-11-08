@@ -3,6 +3,17 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.6 — 2026-11-08
+### Changed
+- **Copy path rewritten for sustained throughput on large files.** Reads and
+  writes bypass the unified buffer cache (`F_NOCACHE`) so a 50 GB file no
+  longer fills RAM, throttles, and stalls on the final fsync; chunks come
+  from a fixed pool of page-aligned buffers instead of a fresh allocation per
+  8 MB; destination files are pre-allocated to their final size
+  (`F_PREALLOCATE`, a big help on ExFAT); writer queues are deeper.
+- Per-file transfer time, duration and MB/s in the text report (with the
+  job's average), and in the log line for each file.
+
 ## 2.5 — 2026-11-08
 ### Fixed
 - Free-space check reported "has Zero KB" on ExFAT / HFS+ / NTFS drives and

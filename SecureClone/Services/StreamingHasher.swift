@@ -34,6 +34,15 @@ final class StreamingHasher {
         }
     }
 
+    func update(_ chunk: Chunk) {
+        let buf = UnsafeRawBufferPointer(start: chunk.base, count: chunk.count)
+        switch algorithm {
+        case .md5:    md5?.update(bufferPointer: buf)
+        case .sha256: sha?.update(bufferPointer: buf)
+        case .xxh64:  xxh?.update(chunk.base, chunk.count)
+        }
+    }
+
     func finalize() -> String {
         switch algorithm {
         case .md5:

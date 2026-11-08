@@ -76,6 +76,26 @@ enum LogWriter {
             lines.append("")
         }
 
+        // Per-file transfer times and speeds.
+        let tf = DateFormatter(); tf.dateFormat = "HH:mm:ss"
+        lines.append("Files (time · size · duration · speed):")
+        for o in outcomes.sorted(by: { ($0.copyStartedAt ?? .distantPast) < ($1.copyStartedAt ?? .distantPast) }) {
+            let mark = o.allVerified ? "✓" : "✗"
+            if let t = o.copyStartedAt, o.copySeconds > 0 {
+                lines.append("  \(mark) \(tf.string(from: t))  \(pad(VolumeInfo.format(o.size), 10))  \(pad(formatDuration(o.copySeconds), 8))  \(pad(String(format: "%.0f MB/s", o.copyMBps), 10))  \(o.relativePath)")
+            } else {
+                lines.append("  \(mark) \(pad("—", 8))  \(pad(VolumeInfo.format(o.size), 10))  \(pad("skipped", 8))  \(pad("", 10))  \(o.relativePath)")
+            }
+        }
+        let timed = outcomes.filter { $0.copySeconds > 0 }
+        if !timed.isEmpty {
+            let bytes = timed.reduce(Int64(0)) { $0 + $1.size }
+            let secs = timed.reduce(0.0) { $0 + $1.copySeconds }
+            let avg = secs > 0 ? Double(bytes) / secs / 1_000_000 : 0
+            lines.append("  Average copy speed: \(String(format: "%.0f", avg)) MB/s over \(VolumeInfo.format(bytes)) in \(formatDuration(secs))")
+        }
+        lines.append("")
+
         lines.append("Total files: \(outcomes.count)")
         lines.append("Total size:  \(VolumeInfo.format(outcomes.reduce(0) { $0 + $1.size }))")
         lines.append("Completed:   \(stamp.string(from: finishDate))")
@@ -98,6 +118,10 @@ enum LogWriter {
         let url = dir.appendingPathComponent("\(ReportNaming.base(jobName: jobName, date: finishDate)).txt")
         try report.data(using: .utf8)!.write(to: url)
         return url
+    }
+
+    private static func pad(_ s: String, _ w: Int) -> String {
+        s.count >= w ? s : s + String(repeating: " ", count: w - s.count)
     }
 
     private static func formatDuration(_ t: TimeInterval) -> String {

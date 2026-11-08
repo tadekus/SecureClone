@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import Darwin
 
 struct FileCloneOutcome: Sendable {
     let relativePath: String
@@ -24,6 +25,11 @@ struct FileCloneOutcome: Sendable {
     let sourceHash: String
     let destinationHashes: [URL: String]
     let verified: [URL: Bool]
+    var copyStartedAt: Date? = nil
+    var copySeconds: Double = 0
+    var verifySeconds: Double = 0
+
+    var copyMBps: Double { copySeconds > 0 ? Double(size) / copySeconds / 1_000_000 : 0 }
 
     /// True when every destination's hash matched the source.
     var allVerified: Bool {
@@ -52,6 +58,10 @@ struct CopiedFile: Sendable {
     let source: ScannedFile
     let sourceHash: String
     let destinationFiles: [URL: URL]   // destination root -> written file
+    var startedAt: Date = Date()
+    var seconds: Double = 0            // wall time for this file's copy (0 = skipped/resumed)
+
+    var mbps: Double { seconds > 0 ? Double(source.size) / seconds / 1_000_000 : 0 }
 }
 
 final class CloneEngine: @unchecked Sendable {
@@ -62,7 +72,7 @@ final class CloneEngine: @unchecked Sendable {
     /// - bufferSize: chunk size. 8 MB is a good match for USB-C SSDs.
     /// - queueDepth: chunks buffered per destination (8 × 8 MB = 64 MB each).
     ///   Deeper = more tolerance for a bursty drive, at the cost of RAM.
-    init(bufferSize: Int = 8 * 1024 * 1024, queueDepth: Int = 8) {
+    init(bufferSize: Int = 8 * 1024 * 1024, queueDepth: Int = 12) {
         self.bufferSize = bufferSize
         self.queueDepth = queueDepth
     }
@@ -78,6 +88,7 @@ final class CloneEngine: @unchecked Sendable {
         control: CloneControl? = nil,
         onChunk: (@Sendable (Int) -> Void)? = nil
     ) throws -> CopiedFile {
+        let startedAt = Date()
 
         // Resolve destination file URLs, preserving the card's folder structure.
         var destFiles: [URL: URL] = [:]
@@ -85,40 +96,76 @@ final class CloneEngine: @unchecked Sendable {
             let destURL = root.appendingPathComponent(source.relativePath)
             try FileManager.default.createDirectory(
                 at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            guard FileManager.default.createFile(atPath: destURL.path, contents: nil) else {
-                throw CloneEngineError.cannotCreateDestination(destURL)
-            }
             destFiles[root] = destURL
         }
+
+        // Open the source: cache bypassed (we read each byte exactly once).
+        let srcFD = open(source.url.path, O_RDONLY)
+        guard srcFD >= 0 else {
+            throw CloneEngineError.readFailed(source.url, posixError())
+        }
+        defer { close(srcFD) }
+        _ = fcntl(srcFD, F_NOCACHE, 1)
+        _ = fcntl(srcFD, F_RDAHEAD, 1)
+
+        // Open every destination: cache bypassed, pre-allocated to final size
+        // (one contiguous allocation instead of cluster-by-cluster growth —
+        // matters on ExFAT).
+        var destFDs: [URL: Int32] = [:]
+        for (root, destURL) in destFiles {
+            let fd = open(destURL.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            guard fd >= 0 else {
+                for f in destFDs.values { close(f) }
+                throw CloneEngineError.cannotCreateDestination(destURL)
+            }
+            _ = fcntl(fd, F_NOCACHE, 1)
+            if source.size > 0 {
+                var store = fstore_t(fst_flags: UInt32(F_ALLOCATECONTIG), fst_posmode: F_PEOFPOSMODE,
+                                     fst_offset: 0, fst_length: off_t(source.size), fst_bytesalloc: 0)
+                if fcntl(fd, F_PREALLOCATE, &store) == -1 {
+                    store.fst_flags = UInt32(F_ALLOCATEALL)
+                    _ = fcntl(fd, F_PREALLOCATE, &store)
+                }
+            }
+            destFDs[root] = fd
+        }
+
+        // Buffer pool shared by the reader, the hasher and every writer.
+        let consumers = destFiles.count + 1
+        let pool = BufferPool(bufferSize: bufferSize, count: queueDepth * consumers + 2)
 
         // One queue + one writer thread per destination.
         var queues: [URL: ChunkQueue] = [:]
         let group = DispatchGroup()
         let writerErrors = ErrorBox()
-
         for (root, destURL) in destFiles {
             let q = ChunkQueue(capacity: queueDepth)
             queues[root] = q
+            let fd = destFDs[root]!
             group.enter()
             Thread.detachNewThread {
                 defer { group.leave() }
-                do {
-                    let handle = try FileHandle(forWritingTo: destURL)
-                    defer { try? handle.close() }
-                    while let chunk = q.pop() {
-                        try handle.write(contentsOf: chunk)
+                while let chunk = q.pop() {
+                    var off = 0
+                    while off < chunk.count {
+                        let n = write(fd, chunk.base.advanced(by: off), chunk.count - off)
+                        if n < 0 {
+                            if errno == EINTR { continue }
+                            let e = CloneEngineError.writeFailed(destURL, posixError())
+                            q.fail(e); writerErrors.set(e); return
+                        }
+                        off += n
                     }
-                    try handle.synchronize()   // flush to the physical disk
-                } catch {
-                    let wrapped = CloneEngineError.writeFailed(destURL, error)
-                    q.fail(wrapped)
-                    writerErrors.set(wrapped)
+                }
+                if fsync(fd) != 0 {       // data is already on disk (NOCACHE); this is cheap
+                    let e = CloneEngineError.writeFailed(destURL, posixError())
+                    q.fail(e); writerErrors.set(e)
                 }
             }
         }
 
-        // Hasher: its own thread with its own queue, so hashing never
-        // serializes with reading or writing.
+        // Hasher: its own thread and queue, so hashing never serializes
+        // with reading or writing.
         let hashQueue = ChunkQueue(capacity: queueDepth)
         let hasher = StreamingHasher(algorithm: algorithm)
         let hashGroup = DispatchGroup()
@@ -128,26 +175,30 @@ final class CloneEngine: @unchecked Sendable {
             while let chunk = hashQueue.pop() { hasher.update(chunk) }
         }
 
-        // Reader: this thread. Read once, fan out to hasher + writers.
+        // Reader: this thread. Read once into a pooled buffer, hand the same
+        // chunk to the hasher and every writer.
         var readError: Error? = nil
         var wasCancelled = false
-        do {
-            let reader = try FileHandle(forReadingFrom: source.url)
-            defer { try? reader.close() }
-            while true {
-                // Pause blocks here; cancel breaks out.
-                if let c = control, !c.checkpoint() { wasCancelled = true; break }
-
-                let chunk = try autoreleasepool { try reader.read(upToCount: bufferSize) ?? Data() }
-                if chunk.isEmpty { break }
-                hashQueue.push(chunk)
-                var anyAlive = false
-                for q in queues.values where q.push(chunk) { anyAlive = true }
-                if !anyAlive { break }      // every writer has failed
-                onChunk?(chunk.count)
+        while true {
+            if let c = control, !c.checkpoint() { wasCancelled = true; break }
+            guard let buf = pool.acquire() else { break }
+            var got = 0
+            while got < bufferSize {
+                let n = read(srcFD, buf.advanced(by: got), bufferSize - got)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    readError = CloneEngineError.readFailed(source.url, posixError()); break
+                }
+                if n == 0 { break }          // EOF
+                got += n
             }
-        } catch {
-            readError = CloneEngineError.readFailed(source.url, error)
+            let chunk = Chunk(base: buf, count: got, pool: pool)
+            if readError != nil || got == 0 { break }
+            hashQueue.push(chunk)
+            var anyAlive = false
+            for q in queues.values where q.push(chunk) { anyAlive = true }
+            if !anyAlive { break }           // every writer has failed
+            onChunk?(got)
         }
 
         // Signal end-of-file and wait for the hasher and all writers to finish.
@@ -155,13 +206,13 @@ final class CloneEngine: @unchecked Sendable {
         queues.values.forEach { $0.close() }
         hashGroup.wait()
         group.wait()
+        for fd in destFDs.values { close(fd) }
+        pool.close()
 
         // A cancelled or failed file must never be left half-written: a later
         // resume could mistake it for a finished copy.
         if wasCancelled || readError != nil || writerErrors.get() != nil {
-            for destURL in destFiles.values {
-                try? FileManager.default.removeItem(at: destURL)
-            }
+            for destURL in destFiles.values { try? FileManager.default.removeItem(at: destURL) }
         }
         if wasCancelled { throw CloneEngineError.cancelled }
         if let e = readError { throw e }
@@ -170,14 +221,17 @@ final class CloneEngine: @unchecked Sendable {
         // Restore the original modification date on each copy.
         if let mod = source.modificationDate {
             for destURL in destFiles.values {
-                try? FileManager.default.setAttributes([.modificationDate: mod],
-                                                       ofItemAtPath: destURL.path)
+                try? FileManager.default.setAttributes([.modificationDate: mod], ofItemAtPath: destURL.path)
             }
         }
 
-        return CopiedFile(source: source,
-                          sourceHash: hasher.finalize(),
-                          destinationFiles: destFiles)
+        return CopiedFile(source: source, sourceHash: hasher.finalize(), destinationFiles: destFiles,
+                          startedAt: startedAt, seconds: Date().timeIntervalSince(startedAt))
+    }
+
+    private func posixError() -> Error {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(errno))])
     }
 
     // MARK: - Phase 2: parallel verification
@@ -228,7 +282,9 @@ final class CloneEngine: @unchecked Sendable {
                                     modificationDate: c.source.modificationDate,
                                     sourceHash: c.sourceHash,
                                     destinationHashes: hashes,
-                                    verified: ok)
+                                    verified: ok,
+                                    copyStartedAt: c.seconds > 0 ? c.startedAt : nil,
+                                    copySeconds: c.seconds)
         }
     }
 }

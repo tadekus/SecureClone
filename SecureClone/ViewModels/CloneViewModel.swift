@@ -547,7 +547,7 @@ final class CloneViewModel: ObservableObject {
                                             onChunk: { progress.add($0) })
                     }.value
                     result = r
-                    log.log("→ \(file.relativePath)  [\(r.sourceHash)]")
+                    log.log("→ \(file.relativePath)  \(VolumeInfo.format(file.size)) in \(CloneJob.formatDuration(r.seconds)) (\(String(format: "%.0f", r.mbps)) MB/s)  [\(r.sourceHash)]")
                 }
                 guard let done = result else { continue }
                 copied.append(done)

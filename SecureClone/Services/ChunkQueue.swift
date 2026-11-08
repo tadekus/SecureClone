@@ -2,7 +2,7 @@
 //  ChunkQueue.swift
 //  SecureClone
 //
-//  A bounded producer/consumer queue of data chunks, one per destination.
+//  A bounded producer/consumer queue of pooled chunks, one per consumer.
 //  The reader thread pushes chunks; each writer thread pops at its own pace.
 //  When a queue is full (a slow drive), only the reader blocks — other
 //  drives keep draining their own queues at full speed.
@@ -14,7 +14,7 @@
 import Foundation
 
 final class ChunkQueue: @unchecked Sendable {
-    private var items: [Data] = []
+    private var items: [Chunk] = []
     private let capacity: Int
     private let cond = NSCondition()
     private var closed = false
@@ -24,7 +24,7 @@ final class ChunkQueue: @unchecked Sendable {
 
     /// Blocks while the queue is full. Returns false if the consumer failed.
     @discardableResult
-    func push(_ chunk: Data) -> Bool {
+    func push(_ chunk: Chunk) -> Bool {
         cond.lock(); defer { cond.unlock() }
         while items.count >= capacity && failure == nil && !closed {
             cond.wait()
@@ -36,7 +36,7 @@ final class ChunkQueue: @unchecked Sendable {
     }
 
     /// Blocks until a chunk is available. Returns nil when closed and drained.
-    func pop() -> Data? {
+    func pop() -> Chunk? {
         cond.lock(); defer { cond.unlock() }
         while items.isEmpty && !closed && failure == nil {
             cond.wait()
