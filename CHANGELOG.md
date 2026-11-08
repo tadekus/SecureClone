@@ -3,6 +3,17 @@
 All notable changes to SecureClone. The build number in the app
 (`v1.5 (42)`) is the GitHub Actions run that produced it.
 
+## 2.1 — 2026-11-08
+### Added
+- **Speed test mode.** Pick any volumes: each gets a write test (temp file,
+  cache disabled, fsync'd, deleted) and a read test; read-only volumes
+  (locked cards) skip the write and read their existing files instead. Shows
+  an estimated transfer matrix for every direction (`min(read A, write B)`)
+  and, optionally, real measured transfers from a chosen source to each
+  writable drive. 256 MB / 1 GB / 4 GB sizes; results can be copied.
+### Fixed
+- Day-summary CSV row that timed out the Swift type-checker.
+
 ## 2.0 — 2026-11-08
 A "card-ingest station" release: the app now runs a queue, names folders
 for you, notices cards it has seen before, and can verify drives on its own.

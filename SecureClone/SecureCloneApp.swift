@@ -16,6 +16,7 @@ struct SecureCloneApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var log: LogStore
     @StateObject private var vm: CloneViewModel
+    @StateObject private var speed: SpeedTestViewModel
     @StateObject private var monitor = DriveMonitor()
 
     init() {
@@ -24,6 +25,7 @@ struct SecureCloneApp: App {
         _settings = StateObject(wrappedValue: settings)
         _log = StateObject(wrappedValue: log)
         _vm = StateObject(wrappedValue: CloneViewModel(settings: settings, log: log))
+        _speed = StateObject(wrappedValue: SpeedTestViewModel(log: log))
     }
 
     var body: some Scene {
@@ -32,12 +34,13 @@ struct SecureCloneApp: App {
                 .environmentObject(settings)
                 .environmentObject(log)
                 .environmentObject(vm)
+                .environmentObject(speed)
                 .environmentObject(monitor)
                 .frame(minWidth: 960, minHeight: 640)
                 .onAppear {
                     monitor.start()
                     vm.attach(monitor: monitor)
-                    AppDelegate.isBusy = { [weak vm] in vm?.isRunning ?? false }
+                    AppDelegate.isBusy = { [weak vm, weak speed] in (vm?.isRunning ?? false) || (speed?.isRunning ?? false) }
                     AppDelegate.keepRunning = { [weak settings] in settings?.showInMenuBar ?? true }
                 }
         }

@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject var vm: CloneViewModel
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var monitor: DriveMonitor
+    @EnvironmentObject var speed: SpeedTestViewModel
 
     var body: some View {
         HSplitView {
@@ -19,11 +20,15 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
                 .padding(.horizontal).padding(.top, 10)
-                .disabled(vm.isRunning)
+                .disabled(vm.isRunning || speed.isRunning)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        if vm.mode == .offload { offloadPane } else { verifyPane }
+                        switch vm.mode {
+                        case .offload: offloadPane
+                        case .verify:  verifyPane
+                        case .speed:   SpeedTestView()
+                        }
                     }
                     .padding()
                 }
@@ -206,7 +211,22 @@ struct ContentView: View {
     // MARK: - Buttons
 
     @ViewBuilder private var actionButtons: some View {
-        if vm.isRunning {
+        if vm.mode == .speed {
+            HStack(spacing: 8) {
+                if speed.isRunning {
+                    Button(role: .destructive) { speed.stop() } label: {
+                        Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large).buttonStyle(.bordered).tint(.red)
+                } else {
+                    Button { speed.run() } label: {
+                        Label("Run Speed Test", systemImage: "gauge.with.dots.needle.67percent").frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large).buttonStyle(.borderedProminent)
+                    .disabled(!speed.canRun || vm.isRunning)
+                }
+            }
+        } else if vm.isRunning {
             HStack(spacing: 8) {
                 Button { if vm.isPaused { vm.resume() } else { vm.pause() } } label: {
                     Label(vm.isPaused ? "Resume" : "Pause", systemImage: vm.isPaused ? "play.fill" : "pause.fill")

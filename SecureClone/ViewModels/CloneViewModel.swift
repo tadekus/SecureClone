@@ -23,7 +23,7 @@ import UniformTypeIdentifiers
 final class CloneViewModel: ObservableObject {
 
     enum Mode: String, CaseIterable, Identifiable {
-        case offload = "Offload", verify = "Verify"
+        case offload = "Offload", verify = "Verify", speed = "Speed test"
         var id: String { rawValue }
     }
 
@@ -104,6 +104,7 @@ final class CloneViewModel: ObservableObject {
         switch mode {
         case .offload: return selectedSource != nil && !selectedDestinations.isEmpty
         case .verify:  return verifyVolume != nil && selectedMHL != nil && !isRunning
+        case .speed:   return false      // the speed-test pane has its own button
         }
     }
     var isPaused: Bool { job?.state == .paused }
@@ -242,6 +243,8 @@ final class CloneViewModel: ObservableObject {
             enqueue(spec)
         case .verify:
             startVerify()
+        case .speed:
+            break
         }
     }
 

@@ -38,6 +38,8 @@ offload tools, in a small open-source app they can build themselves.
   can be **resumed** later — resumed files are still re-verified
 - Summary sheet on completion with a clear **SAFE TO WIPE / DO NOT WIPE** verdict
 - **Verify-only mode**: re-hash a drive against any MHL on it
+- **Speed test**: read/write per drive (cache-busting), transfer matrix between
+  drives, real transfer measurement; read-only cards get a read test
 - **Shooting-day summary** across all cards; searchable, persisted **log**;
   **menu-bar** item that keeps jobs running with the window closed
 
